@@ -24,7 +24,12 @@ def make_settings() -> Settings:
                 public_id="gpt-5.4",
                 owner="openai",
                 name="gpt-5.4",
-            )
+            ),
+            "gpt-5-nano": ReplicateModel(
+                public_id="gpt-5-nano",
+                owner="openai",
+                name="gpt-5-nano",
+            ),
         },
         replicate_reasoning_effort="none",
         replicate_verbosity="low",
@@ -125,6 +130,12 @@ def test_models_lists_available_models() -> None:
                 "created": 0,
                 "owned_by": "openai",
             },
+            {
+                "id": "gpt-5-nano",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+            },
         ],
     }
 
@@ -145,10 +156,10 @@ def test_chat_completions_returns_400_for_unknown_model() -> None:
 
 def test_chat_completions_uses_requested_replicate_model() -> None:
     settings = make_settings()
-    settings.replicate_model_map["gpt-5.4-alt"] = ReplicateModel(
-        public_id="gpt-5.4-alt",
+    settings.replicate_model_map["gpt-5-nano-alt"] = ReplicateModel(
+        public_id="gpt-5-nano-alt",
         owner="openai",
-        name="gpt-5.4",
+        name="gpt-5-nano",
     )
 
     with make_client(settings) as client:
@@ -158,7 +169,7 @@ def test_chat_completions_uses_requested_replicate_model() -> None:
         response = client.post(
             "/v1/chat/completions",
             json={
-                "model": "gpt-5.4-alt",
+                "model": "gpt-5-nano-alt",
                 "messages": [{"role": "user", "content": "hello"}],
             },
         )
@@ -167,9 +178,9 @@ def test_chat_completions_uses_requested_replicate_model() -> None:
     called_model = (
         client.app.state.services.replicate_client.create_reply.await_args.args[0]
     )
-    assert called_model.public_id == "gpt-5.4-alt"
+    assert called_model.public_id == "gpt-5-nano-alt"
     assert called_model.owner == "openai"
-    assert called_model.name == "gpt-5.4"
+    assert called_model.name == "gpt-5-nano"
 
 
 def test_streaming_echo_returns_sse_and_usage() -> None:

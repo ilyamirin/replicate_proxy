@@ -75,7 +75,7 @@ def load_settings() -> Settings:
         replicate_model_map=_parse_model_map(
             os.getenv("REPLICATE_MODEL_MAP", DEFAULT_REPLICATE_MODEL_MAP)
         ),
-        replicate_reasoning_effort=os.getenv("REPLICATE_REASONING_EFFORT", "none"),
+        replicate_reasoning_effort=os.getenv("REPLICATE_REASONING_EFFORT", "minimal"),
         replicate_verbosity=os.getenv("REPLICATE_VERBOSITY", "low"),
         replicate_max_completion_tokens=int(
             os.getenv("REPLICATE_MAX_COMPLETION_TOKENS", "4096")

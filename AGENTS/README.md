@@ -44,7 +44,8 @@
 - `REPLICATE_API_TOKEN`: local secret, only in `.env`
 - `REPLICATE_BASE_URL`: default `https://api.replicate.com/v1`
 - `REPLICATE_MODEL_MAP`: comma-separated `public-id=owner/model-name` entries used by `/v1/models` and chat routing
-- `REPLICATE_REASONING_EFFORT`: default `none`
+  Current defaults include `gpt-5.4` and `gpt-5-nano`
+- `REPLICATE_REASONING_EFFORT`: default `minimal`
 - `REPLICATE_VERBOSITY`: default `low`
 - `REPLICATE_MAX_COMPLETION_TOKENS`: default `4096`
 - `REPLICATE_SYNC_WAIT_SECONDS`: sync wait header for Replicate

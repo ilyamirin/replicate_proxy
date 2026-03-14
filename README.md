@@ -16,6 +16,7 @@ Local echo is exposed as model `echo` by default and can be renamed with `ECHO_M
 Settings are loaded once when the service starts.
 Token counting uses local `tiktoken` data from `.tiktoken-cache/o200k_base.tiktoken`.
 The repository must contain `.tiktoken-cache/o200k_base.tiktoken`; startup copies it to the cache key path expected by `tiktoken`.
+Default Replicate models in the config are `gpt-5.4` and `gpt-5-nano`.
 
 ## Run
 
@@ -52,8 +53,10 @@ Always run these before commit:
 - `stream=true` returns real `text/event-stream` chunks
 - Token usage is calculated with local `tiktoken` using `o200k_base`
 - `REPLICATE_MODEL_MAP` format: `public-id=owner/model-name`
+- Current defaults: `gpt-5.4=openai/gpt-5.4`, `gpt-5-nano=openai/gpt-5-nano`
 - Official prediction endpoint pattern: `POST /v1/models/{owner}/{name}/predictions`
 - The app sends `messages`, `reasoning_effort`, `verbosity`, and `max_completion_tokens`
+- Default `REPLICATE_REASONING_EFFORT` is `minimal`
 - Sync mode uses `Prefer: wait=<seconds>`
 - If Replicate returns an incomplete non-stream prediction, the app polls the `urls.get` URL until completion or timeout
 - Stream errors before the upstream stream starts return normal HTTP `502`
