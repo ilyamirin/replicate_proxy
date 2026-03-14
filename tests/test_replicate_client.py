@@ -8,6 +8,18 @@ from app.config import EchoModel, ReplicateModel, Settings
 from app.schemas import ChatCompletionRequest, ChatMessage
 
 
+class FakeFilesClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def prepare_image_url(self, source: str) -> str:
+        self.calls.append(source)
+        return f"https://api.replicate.com/v1/files/{len(self.calls)}"
+
+    async def aclose(self) -> None:
+        return None
+
+
 def make_settings() -> Settings:
     return Settings(
         app_name="Test App",
@@ -76,6 +88,32 @@ def test_replicate_client_returns_sync_output() -> None:
         assert "reasoning_effort" not in body["input"]
         assert "verbosity" not in body["input"]
         assert "max_completion_tokens" not in body["input"]
+
+    asyncio.run(run())
+
+
+def test_replicate_client_raises_on_failed_prediction_with_empty_output() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"status": "failed", "output": [], "error": "bad"}
+        )
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=make_settings().replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(make_settings(), http_client=http_client)
+            try:
+                await client.create_reply(
+                    make_settings().replicate_model_map["gpt-5.4"],
+                    make_payload(messages=[ChatMessage(role="user", content="fail")]),
+                )
+            except ReplicateError as exc:
+                assert "bad" in str(exc)
+            else:
+                raise AssertionError("ReplicateError was not raised")
 
     asyncio.run(run())
 
@@ -253,12 +291,17 @@ def test_replicate_client_uses_native_prompt_fields_when_messages_are_omitted() 
         return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
 
     async def run() -> None:
+        files_client = FakeFilesClient()
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(
             base_url=make_settings().replicate_base_url,
             transport=transport,
         ) as http_client:
-            client = ReplicateClient(make_settings(), http_client=http_client)
+            client = ReplicateClient(
+                make_settings(),
+                http_client=http_client,
+                files_client=files_client,
+            )
             await client.create_reply(
                 make_settings().replicate_model_map["gpt-5.4"],
                 ChatCompletionRequest(
@@ -270,9 +313,94 @@ def test_replicate_client_uses_native_prompt_fields_when_messages_are_omitted() 
             )
 
         body = json.loads(calls[0].content)
+        assert files_client.calls == ["https://example.com/cat.png"]
         assert "messages" not in body["input"]
         assert body["input"]["prompt"] == "Describe this image"
         assert body["input"]["system_prompt"] == "Reply briefly."
-        assert body["input"]["image_input"] == ["https://example.com/cat.png"]
+        assert body["input"]["image_input"] == ["https://api.replicate.com/v1/files/1"]
+
+    asyncio.run(run())
+
+
+def test_replicate_client_uploads_native_image_input_urls() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
+
+    async def run() -> None:
+        files_client = FakeFilesClient()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=make_settings().replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(
+                make_settings(),
+                http_client=http_client,
+                files_client=files_client,
+            )
+            await client.create_reply(
+                make_settings().replicate_model_map["gpt-5.4"],
+                ChatCompletionRequest(
+                    model="gpt-5.4",
+                    prompt="Describe this image",
+                    image_input=["https://example.com/cat.png"],
+                    reasoning_effort="none",
+                ),
+            )
+
+        body = json.loads(calls[0].content)
+        assert files_client.calls == ["https://example.com/cat.png"]
+        assert body["input"]["image_input"] == ["https://api.replicate.com/v1/files/1"]
+
+    asyncio.run(run())
+
+
+def test_replicate_client_converts_message_images_to_native_input() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
+
+    async def run() -> None:
+        files_client = FakeFilesClient()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=make_settings().replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(
+                make_settings(),
+                http_client=http_client,
+                files_client=files_client,
+            )
+            await client.create_reply(
+                make_settings().replicate_model_map["gpt-5.4"],
+                ChatCompletionRequest(
+                    model="gpt-5.4",
+                    reasoning_effort="none",
+                    messages=[
+                        ChatMessage(
+                            role="user",
+                            content=[
+                                {"type": "text", "text": "What animal is shown?"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": "https://example.com/cat.png"},
+                                },
+                            ],
+                        )
+                    ],
+                ),
+            )
+
+        body = json.loads(calls[0].content)
+        assert files_client.calls == ["https://example.com/cat.png"]
+        assert "messages" not in body["input"]
+        assert body["input"]["prompt"] == "What animal is shown?"
+        assert body["input"]["image_input"] == ["https://api.replicate.com/v1/files/1"]
 
     asyncio.run(run())

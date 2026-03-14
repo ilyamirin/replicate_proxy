@@ -8,14 +8,12 @@ from time import monotonic
 
 import httpx
 
+from app.clients.errors import ReplicateError
+from app.clients.replicate_files import ReplicateFilesClient
 from app.config import ReplicateModel, Settings
 from app.schemas import ChatCompletionRequest
 
 TERMINAL_STATUSES = {"failed", "canceled", "aborted", "succeeded"}
-
-
-class ReplicateError(RuntimeError):
-    """Replicate API request failed."""
 
 
 @dataclass
@@ -51,17 +49,22 @@ class ReplicateClient:
         self,
         settings: Settings,
         http_client: httpx.AsyncClient | None = None,
+        files_client: ReplicateFilesClient | None = None,
     ) -> None:
         self.settings = settings
         self._owns_client = http_client is None
+        self._owns_files_client = files_client is None
         self._http_client = http_client or httpx.AsyncClient(
             base_url=settings.replicate_base_url,
             timeout=settings.replicate_http_timeout_seconds,
         )
+        self._files_client = files_client or ReplicateFilesClient(settings)
 
     async def aclose(self) -> None:
         if self._owns_client:
             await self._http_client.aclose()
+        if self._owns_files_client:
+            await self._files_client.aclose()
 
     async def create_reply(
         self,
@@ -97,13 +100,14 @@ class ReplicateClient:
         *,
         stream: bool,
     ) -> dict:
+        input_payload = await self._build_input(payload)
         response = await self._request(
             "POST",
             self._prediction_url(model),
             headers={"Prefer": f"wait={self.settings.replicate_sync_wait_seconds}"},
             json={
                 "stream": stream,
-                "input": self._build_input(payload),
+                "input": input_payload,
             },
         )
         return response.json()
@@ -188,19 +192,23 @@ class ReplicateClient:
             headers.update(extra)
         return headers
 
-    def _build_input(self, payload: ChatCompletionRequest) -> dict:
+    async def _build_input(self, payload: ChatCompletionRequest) -> dict:
         input_payload: dict = {}
         if payload.messages:
-            input_payload["messages"] = [
-                message.model_dump(exclude_none=True) for message in payload.messages
-            ]
+            if self._messages_include_images(payload):
+                input_payload.update(await self._build_native_vision_input(payload))
+            else:
+                input_payload["messages"] = await self._prepare_messages(payload)
         else:
             if payload.prompt is not None:
                 input_payload["prompt"] = payload.prompt
             if payload.system_prompt is not None:
                 input_payload["system_prompt"] = payload.system_prompt
             if payload.image_input:
-                input_payload["image_input"] = payload.image_input
+                input_payload["image_input"] = [
+                    await self._files_client.prepare_image_url(image_url)
+                    for image_url in payload.image_input
+                ]
         reasoning_effort = self._pick_option(
             payload.reasoning_effort,
             None,
@@ -221,6 +229,79 @@ class ReplicateClient:
             input_payload["max_completion_tokens"] = max_completion_tokens
         return input_payload
 
+    async def _build_native_vision_input(self, payload: ChatCompletionRequest) -> dict:
+        system_parts: list[str] = []
+        prompt_lines: list[str] = []
+        image_input: list[str] = []
+
+        for message in payload.messages:
+            text_parts: list[str] = []
+            content = message.content
+            if isinstance(content, str):
+                text_parts.append(content)
+            else:
+                for part in content:
+                    if part.type == "text":
+                        text_parts.append(part.text)
+                    elif part.type == "image_url":
+                        uploaded_url = await self._files_client.prepare_image_url(
+                            part.image_url.url
+                        )
+                        image_input.append(uploaded_url)
+
+            text = "\n".join(text_parts).strip()
+            if not text:
+                continue
+            if message.role == "system":
+                system_parts.append(text)
+            elif message.role == "user":
+                prompt_lines.append(text)
+            else:
+                prompt_lines.append(f"{message.role}: {text}")
+
+        input_payload: dict = {}
+        if system_parts:
+            input_payload["system_prompt"] = "\n\n".join(system_parts)
+        if prompt_lines:
+            input_payload["prompt"] = "\n\n".join(prompt_lines)
+        if image_input:
+            input_payload["image_input"] = image_input
+        return input_payload
+
+    async def _prepare_messages(self, payload: ChatCompletionRequest) -> list[dict]:
+        prepared_messages: list[dict] = []
+        for message in payload.messages:
+            dump = message.model_dump(exclude_none=True)
+            content = dump.get("content")
+            if isinstance(content, list):
+                normalized_parts: list[dict] = []
+                for part in content:
+                    if part.get("type") == "image_url":
+                        image_url = part["image_url"]["url"]
+                        part = {
+                            **part,
+                            "image_url": {
+                                **part["image_url"],
+                                "url": await self._files_client.prepare_image_url(
+                                    image_url
+                                ),
+                            },
+                        }
+                    normalized_parts.append(part)
+                dump["content"] = normalized_parts
+            prepared_messages.append(dump)
+        return prepared_messages
+
+    @staticmethod
+    def _messages_include_images(payload: ChatCompletionRequest) -> bool:
+        for message in payload.messages:
+            content = message.content
+            if isinstance(content, str):
+                continue
+            if any(part.type == "image_url" for part in content):
+                return True
+        return False
+
     @staticmethod
     def _prediction_url(model: ReplicateModel) -> str:
         return f"/models/{model.owner}/{model.name}/predictions"
@@ -235,6 +316,8 @@ class ReplicateClient:
         if output is None:
             return None
         if isinstance(output, list):
+            if not output:
+                return None
             return "".join(str(item) for item in output)
         return str(output)
 
