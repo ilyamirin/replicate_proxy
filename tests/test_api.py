@@ -31,7 +31,6 @@ def make_settings() -> Settings:
                 name="gpt-5-nano",
             ),
         },
-        replicate_default_reasoning_effort=None,
         replicate_default_verbosity=None,
         replicate_default_max_completion_tokens=None,
         replicate_sync_wait_seconds=60,
@@ -203,6 +202,7 @@ def test_chat_completions_uses_requested_replicate_model() -> None:
             "/v1/chat/completions",
             json={
                 "model": "gpt-5-nano-alt",
+                "reasoning_effort": "medium",
                 "messages": [{"role": "user", "content": "hello"}],
             },
         )
@@ -241,6 +241,75 @@ def test_chat_completions_passes_request_model_options() -> None:
     assert called_payload.max_completion_tokens == 321
 
 
+def test_gpt_5_nano_rejects_invalid_reasoning_effort_for_model() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5-nano",
+                "reasoning_effort": "xhigh",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 422
+    assert "not valid for model gpt-5-nano" in response.json()["detail"]
+
+
+def test_replicate_models_require_reasoning_effort() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "reasoning_effort is required for model gpt-5.4"
+
+
+def test_chat_completions_accepts_prompt_system_prompt_and_image_input() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_client.create_reply = AsyncMock(
+            return_value="backend reply"
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5-nano",
+                "reasoning_effort": "low",
+                "prompt": "Describe this image",
+                "system_prompt": "Reply briefly.",
+                "image_input": ["https://example.com/cat.png"],
+            },
+        )
+
+    assert response.status_code == 200
+    called_payload = (
+        client.app.state.services.replicate_client.create_reply.await_args.args[1]
+    )
+    assert called_payload.prompt == "Describe this image"
+    assert called_payload.system_prompt == "Reply briefly."
+    assert called_payload.image_input == ["https://example.com/cat.png"]
+
+
+def test_echo_uses_prompt_when_messages_are_omitted() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "echo",
+                "prompt": "echo via prompt",
+                "system_prompt": "ignored by echo output",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "echo via prompt"
+
+
 def test_streaming_echo_returns_sse_and_usage() -> None:
     with make_client() as client:
         response = client.post(
@@ -273,6 +342,7 @@ def test_streaming_replicate_preflight_error_returns_502() -> None:
             json={
                 "model": "gpt-5.4",
                 "stream": True,
+                "reasoning_effort": "medium",
                 "messages": [{"role": "user", "content": "fail"}],
             },
         )
@@ -319,6 +389,16 @@ def test_chat_completions_rejects_invalid_model_options() -> None:
                 "max_completion_tokens": 0,
                 "messages": [{"role": "user", "content": "hello"}],
             },
+        )
+
+    assert response.status_code == 422
+
+
+def test_chat_completions_requires_some_input() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "gpt-5.4"},
         )
 
     assert response.status_code == 422

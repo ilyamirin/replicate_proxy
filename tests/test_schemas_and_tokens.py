@@ -1,6 +1,11 @@
 from pydantic import ValidationError
 
-from app.schemas import ChatCompletionRequest, ChatMessage, content_to_string
+from app.schemas import (
+    ChatCompletionRequest,
+    ChatMessage,
+    build_messages_from_request,
+    content_to_string,
+)
 from app.tokens import TokenCounter
 
 
@@ -80,3 +85,18 @@ def test_token_counter_counts_multimodal_prompt_content() -> None:
     ]
 
     assert counter.count_messages(multimodal) > counter.count_messages(plain_text)
+
+
+def test_build_messages_from_request_uses_native_input_fields() -> None:
+    payload = ChatCompletionRequest(
+        model="gpt-5-nano",
+        prompt="Describe this image",
+        system_prompt="Reply briefly.",
+        image_input=["https://example.com/cat.png"],
+    )
+
+    messages = build_messages_from_request(payload)
+    assert messages[0].role == "system"
+    assert messages[0].content == "Reply briefly."
+    assert messages[1].role == "user"
+    assert content_to_string(messages[1].content).startswith("Describe this image")

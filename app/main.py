@@ -18,6 +18,7 @@ from app.config import (
     load_settings,
     snapshot_settings,
 )
+from app.model_options import allowed_reasoning_efforts
 from app.schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -25,6 +26,7 @@ from app.schemas import (
     ModelCard,
     ModelListResponse,
     ResponseMessage,
+    build_messages_from_request,
 )
 
 
@@ -65,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=400, detail=f"Unknown model: {payload.model}"
             )
+        validate_model_payload(services.settings, model, payload)
 
         if payload.stream:
             try:
@@ -81,7 +84,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ReplicateError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-        usage = services.token_counter.build_usage(payload.messages, reply)
+        usage = services.token_counter.build_usage(
+            build_messages_from_request(payload),
+            reply,
+        )
         response = ChatCompletionResponse(
             id=f"chatcmpl-{uuid4().hex}",
             created=int(time()),
@@ -108,8 +114,9 @@ async def create_model_reply(
     model: EchoModel | ReplicateModel,
     payload: ChatCompletionRequest,
 ) -> str:
+    messages = build_messages_from_request(payload)
     if isinstance(model, EchoModel):
-        return await services.echo_service.create_reply(payload.messages)
+        return await services.echo_service.create_reply(messages)
     return await services.replicate_client.create_reply(model, payload)
 
 
@@ -122,6 +129,7 @@ async def stream_chat_completion(
     chat_id = f"chatcmpl-{uuid4().hex}"
     created = int(time())
     text_parts: list[str] = []
+    messages = build_messages_from_request(payload)
 
     yield sse_chunk(
         {
@@ -137,7 +145,7 @@ async def stream_chat_completion(
 
     try:
         if isinstance(model, EchoModel):
-            reply = await services.echo_service.create_reply(payload.messages)
+            reply = await services.echo_service.create_reply(messages)
             if reply:
                 text_parts.append(reply)
                 yield sse_chunk(
@@ -181,7 +189,7 @@ async def stream_chat_completion(
         return
 
     completion_text = "".join(text_parts)
-    usage = services.token_counter.build_usage(payload.messages, completion_text)
+    usage = services.token_counter.build_usage(messages, completion_text)
     if payload.stream_options and payload.stream_options.include_usage:
         yield sse_chunk(
             {
@@ -218,6 +226,35 @@ async def prepare_model_stream(
     if isinstance(model, EchoModel):
         return None
     return await services.replicate_client.create_reply_stream(model, payload)
+
+
+def validate_model_payload(
+    _: Settings,
+    model: EchoModel | ReplicateModel,
+    payload: ChatCompletionRequest,
+) -> None:
+    if isinstance(model, EchoModel):
+        return
+
+    allowed = allowed_reasoning_efforts(model)
+    if allowed is None:
+        return
+
+    if payload.reasoning_effort is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"reasoning_effort is required for model {model.public_id}",
+        )
+
+    if payload.reasoning_effort not in allowed:
+        allowed_text = ", ".join(sorted(allowed))
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"reasoning_effort={payload.reasoning_effort!r} is not valid "
+                f"for model {model.public_id}; allowed: {allowed_text}"
+            ),
+        )
 
 
 app = create_app()

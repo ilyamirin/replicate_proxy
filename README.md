@@ -56,9 +56,10 @@ Always run these before commit:
 - Current defaults: `gpt-5.4=openai/gpt-5.4`, `gpt-5-nano=openai/gpt-5-nano`
 - Official prediction endpoint pattern: `POST /v1/models/{owner}/{name}/predictions`
 - The app always sends `messages`
-- The app also forwards OpenAI-style request fields `reasoning_effort`, `verbosity`, and `max_completion_tokens` when the client provides them
-- Optional server-side fallback envs are `REPLICATE_DEFAULT_REASONING_EFFORT`, `REPLICATE_DEFAULT_VERBOSITY`, and `REPLICATE_DEFAULT_MAX_COMPLETION_TOKENS`
-- If those fallback envs are empty, the app omits the fields and lets Replicate use the model default
+- Replicate models require the client to send `reasoning_effort`
+- The app also forwards OpenAI-style request fields `verbosity` and `max_completion_tokens` when the client provides them
+- Optional server-side fallback envs exist only for `verbosity` and `max_completion_tokens`
+- The request may use either `messages` or Replicate-native `prompt`, `system_prompt`, and `image_input`
 - `messages[].content` may be a plain string or an OpenAI-style content-part array with `text` and `image_url`
 - Sync mode uses `Prefer: wait=<seconds>`
 - If Replicate returns an incomplete non-stream prediction, the app polls the `urls.get` URL until completion or timeout

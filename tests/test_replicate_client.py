@@ -26,7 +26,6 @@ def make_settings() -> Settings:
                 name="gpt-5.4",
             )
         },
-        replicate_default_reasoning_effort=None,
         replicate_default_verbosity=None,
         replicate_default_max_completion_tokens=None,
         replicate_sync_wait_seconds=60,
@@ -246,7 +245,7 @@ def test_replicate_client_passes_request_options() -> None:
     asyncio.run(run())
 
 
-def test_replicate_client_uses_env_defaults_when_request_omits_options() -> None:
+def test_replicate_client_uses_native_prompt_fields_when_messages_are_omitted() -> None:
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -254,29 +253,26 @@ def test_replicate_client_uses_env_defaults_when_request_omits_options() -> None
         return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
 
     async def run() -> None:
-        settings = make_settings()
-        settings = Settings(
-            **{
-                **settings.__dict__,
-                "replicate_default_reasoning_effort": "medium",
-                "replicate_default_verbosity": "low",
-                "replicate_default_max_completion_tokens": 512,
-            }
-        )
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(
-            base_url=settings.replicate_base_url,
+            base_url=make_settings().replicate_base_url,
             transport=transport,
         ) as http_client:
-            client = ReplicateClient(settings, http_client=http_client)
+            client = ReplicateClient(make_settings(), http_client=http_client)
             await client.create_reply(
-                settings.replicate_model_map["gpt-5.4"],
-                make_payload(),
+                make_settings().replicate_model_map["gpt-5.4"],
+                ChatCompletionRequest(
+                    model="gpt-5.4",
+                    prompt="Describe this image",
+                    system_prompt="Reply briefly.",
+                    image_input=["https://example.com/cat.png"],
+                ),
             )
 
         body = json.loads(calls[0].content)
-        assert body["input"]["reasoning_effort"] == "medium"
-        assert body["input"]["verbosity"] == "low"
-        assert body["input"]["max_completion_tokens"] == 512
+        assert "messages" not in body["input"]
+        assert body["input"]["prompt"] == "Describe this image"
+        assert body["input"]["system_prompt"] == "Reply briefly."
+        assert body["input"]["image_input"] == ["https://example.com/cat.png"]
 
     asyncio.run(run())

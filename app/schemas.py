@@ -1,7 +1,7 @@
 import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ImageURL(BaseModel):
@@ -40,14 +40,25 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: str
-    messages: list[ChatMessage]
+    messages: list[ChatMessage] = Field(default_factory=list)
     stream: bool = False
     stream_options: "StreamOptions | None" = None
+    prompt: str | None = None
+    system_prompt: str | None = None
+    image_input: list[str] = Field(default_factory=list)
     reasoning_effort: (
         Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None
     ) = None
     verbosity: Literal["low", "medium", "high"] | None = None
     max_completion_tokens: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_input_shape(self) -> "ChatCompletionRequest":
+        if self.messages or self.prompt or self.system_prompt or self.image_input:
+            return self
+        raise ValueError(
+            "One of messages, prompt, system_prompt, or image_input must be provided."
+        )
 
 
 class StreamOptions(BaseModel):
@@ -109,3 +120,28 @@ def content_to_string(content: MessageContent) -> str:
                 )
             )
     return "\n".join(parts)
+
+
+def build_messages_from_request(payload: ChatCompletionRequest) -> list[ChatMessage]:
+    if payload.messages:
+        return payload.messages
+
+    messages: list[ChatMessage] = []
+    if payload.system_prompt:
+        messages.append(ChatMessage(role="system", content=payload.system_prompt))
+
+    user_parts: list[ChatContentPart] = []
+    if payload.prompt:
+        user_parts.append(InputTextPart(type="text", text=payload.prompt))
+    user_parts.extend(
+        InputImagePart(type="image_url", image_url=ImageURL(url=url))
+        for url in payload.image_input
+    )
+    if user_parts:
+        if len(user_parts) == 1 and isinstance(user_parts[0], InputTextPart):
+            user_content: MessageContent = user_parts[0].text
+        else:
+            user_content = user_parts
+        messages.append(ChatMessage(role="user", content=user_content))
+
+    return messages

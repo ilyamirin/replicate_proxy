@@ -189,14 +189,21 @@ class ReplicateClient:
         return headers
 
     def _build_input(self, payload: ChatCompletionRequest) -> dict:
-        input_payload = {
-            "messages": [
+        input_payload: dict = {}
+        if payload.messages:
+            input_payload["messages"] = [
                 message.model_dump(exclude_none=True) for message in payload.messages
             ]
-        }
+        else:
+            if payload.prompt is not None:
+                input_payload["prompt"] = payload.prompt
+            if payload.system_prompt is not None:
+                input_payload["system_prompt"] = payload.system_prompt
+            if payload.image_input:
+                input_payload["image_input"] = payload.image_input
         reasoning_effort = self._pick_option(
             payload.reasoning_effort,
-            self.settings.replicate_default_reasoning_effort,
+            None,
         )
         verbosity = self._pick_option(
             payload.verbosity,

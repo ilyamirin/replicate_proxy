@@ -30,7 +30,6 @@ class Settings:
     replicate_api_token: str
     replicate_base_url: str
     replicate_model_map: dict[str, ReplicateModel]
-    replicate_default_reasoning_effort: str | None
     replicate_default_verbosity: str | None
     replicate_default_max_completion_tokens: int | None
     replicate_sync_wait_seconds: int
@@ -88,9 +87,6 @@ def load_settings() -> Settings:
         replicate_model_map=_parse_model_map(
             os.getenv("REPLICATE_MODEL_MAP", DEFAULT_REPLICATE_MODEL_MAP)
         ),
-        replicate_default_reasoning_effort=_optional_str_env(
-            "REPLICATE_DEFAULT_REASONING_EFFORT"
-        ),
         replicate_default_verbosity=_optional_str_env("REPLICATE_DEFAULT_VERBOSITY"),
         replicate_default_max_completion_tokens=_optional_int_env(
             "REPLICATE_DEFAULT_MAX_COMPLETION_TOKENS"
@@ -120,7 +116,6 @@ def snapshot_settings(settings: Settings) -> Settings:
         replicate_api_token=settings.replicate_api_token,
         replicate_base_url=settings.replicate_base_url,
         replicate_model_map=dict(settings.replicate_model_map),
-        replicate_default_reasoning_effort=settings.replicate_default_reasoning_effort,
         replicate_default_verbosity=settings.replicate_default_verbosity,
         replicate_default_max_completion_tokens=(
             settings.replicate_default_max_completion_tokens
