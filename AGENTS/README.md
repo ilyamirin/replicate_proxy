@@ -45,9 +45,9 @@
 - `REPLICATE_BASE_URL`: default `https://api.replicate.com/v1`
 - `REPLICATE_MODEL_MAP`: comma-separated `public-id=owner/model-name` entries used by `/v1/models` and chat routing
   Current defaults include `gpt-5.4` and `gpt-5-nano`
-- `REPLICATE_REASONING_EFFORT`: default `minimal`
-- `REPLICATE_VERBOSITY`: default `low`
-- `REPLICATE_MAX_COMPLETION_TOKENS`: default `4096`
+- `REPLICATE_DEFAULT_REASONING_EFFORT`: optional fallback for requests that omit `reasoning_effort`
+- `REPLICATE_DEFAULT_VERBOSITY`: optional fallback for requests that omit `verbosity`
+- `REPLICATE_DEFAULT_MAX_COMPLETION_TOKENS`: optional fallback for requests that omit `max_completion_tokens`
 - `REPLICATE_SYNC_WAIT_SECONDS`: sync wait header for Replicate
 - `REPLICATE_POLL_INTERVAL_SECONDS`: poll interval after incomplete sync response
 - `REPLICATE_POLL_TIMEOUT_SECONDS`: max poll duration
@@ -60,10 +60,13 @@
 - If the request `model` equals `ECHO_MODEL_ID`, reply content is the last `user` message from the request
 - All other known models are resolved via `REPLICATE_MODEL_MAP` and sent to Replicate
 - `stream=true` returns OpenAI-style SSE chunks
+- Request schema also accepts OpenAI-style `reasoning_effort`, `verbosity`, and `max_completion_tokens`
+- If those request fields are absent, the app uses `REPLICATE_DEFAULT_*` env fallbacks when configured
 - If there is no `user` message, the response body uses `APP_ECHO_EMPTY_RESPONSE`
 - Token usage is calculated with local `tiktoken`
 - The repo must include `.tiktoken-cache/o200k_base.tiktoken`; startup derives the hashed cache entry from it
 - Request schema accepts `role` in `system|user|assistant|tool`
+- `messages[].content` supports either a plain string or an OpenAI-style part array with `text` and `image_url`
 - Unknown extra request fields are ignored by pydantic models
 
 ## Local setup
