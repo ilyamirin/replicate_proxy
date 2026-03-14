@@ -7,6 +7,8 @@
 .mypy_cache/
 .coverage
 .coverage.*
+.tiktoken-cache/*
+!.tiktoken-cache/o200k_base.tiktoken
 __pycache__/
 *.egg-info/
 *.py[cod]

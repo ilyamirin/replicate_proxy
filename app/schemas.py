@@ -16,6 +16,11 @@ class ChatCompletionRequest(BaseModel):
     model: str
     messages: list[ChatMessage]
     stream: bool = False
+    stream_options: "StreamOptions | None" = None
+
+
+class StreamOptions(BaseModel):
+    include_usage: bool = False
 
 
 class ResponseMessage(BaseModel):
@@ -42,3 +47,15 @@ class ChatCompletionResponse(BaseModel):
     model: str
     choices: list[Choice] = Field(default_factory=list)
     usage: Usage
+
+
+class ModelCard(BaseModel):
+    id: str
+    object: Literal["model"] = "model"
+    created: int = 0
+    owned_by: str
+
+
+class ModelListResponse(BaseModel):
+    object: Literal["list"] = "list"
+    data: list[ModelCard] = Field(default_factory=list)

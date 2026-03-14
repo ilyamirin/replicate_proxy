@@ -1,10 +1,10 @@
 import uvicorn
 
-from app.config import get_settings
+from app.config import load_settings
 
 
 def main() -> None:
-    settings = get_settings()
+    settings = load_settings()
     uvicorn.run("app.main:app", host=settings.app_host, port=settings.app_port)
 
 

@@ -1,13 +1,12 @@
 from app.schemas import ChatMessage
-from app.config import get_settings
 
 
 class EchoService:
+    def __init__(self, empty_response: str) -> None:
+        self.empty_response = empty_response
+
     async def create_reply(self, messages: list[ChatMessage]) -> str:
         for message in reversed(messages):
             if message.role == "user":
                 return message.content
-        return get_settings().echo_empty_response
-
-
-echo_service = EchoService()
+        return self.empty_response
