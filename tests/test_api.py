@@ -31,9 +31,9 @@ def make_settings() -> Settings:
                 name="gpt-5-nano",
             ),
         },
-        replicate_reasoning_effort="none",
-        replicate_verbosity="low",
-        replicate_max_completion_tokens=4096,
+        replicate_default_reasoning_effort=None,
+        replicate_default_verbosity=None,
+        replicate_default_max_completion_tokens=None,
         replicate_sync_wait_seconds=60,
         replicate_poll_interval_seconds=0.0,
         replicate_poll_timeout_seconds=1.0,
@@ -56,6 +56,12 @@ def parse_sse(body: str) -> list[dict | str]:
         else:
             events.append(json.loads(payload))
     return events
+
+
+class EmptyReplyStream:
+    async def iter_output(self):
+        if False:
+            yield ""
 
 
 def test_healthcheck() -> None:
@@ -108,6 +114,33 @@ def test_chat_completions_returns_empty_string_without_user_message() -> None:
 
     assert response.status_code == 200
     assert response.json()["choices"][0]["message"]["content"] == ""
+
+
+def test_chat_completions_echo_accepts_multimodal_content() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "echo",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe image"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/cat.png"},
+                            },
+                        ],
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"].startswith(
+        "describe image"
+    )
 
 
 def test_models_lists_available_models() -> None:
@@ -183,6 +216,31 @@ def test_chat_completions_uses_requested_replicate_model() -> None:
     assert called_model.name == "gpt-5-nano"
 
 
+def test_chat_completions_passes_request_model_options() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_client.create_reply = AsyncMock(
+            return_value="backend reply"
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "reasoning_effort": "high",
+                "verbosity": "medium",
+                "max_completion_tokens": 321,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    called_payload = (
+        client.app.state.services.replicate_client.create_reply.await_args.args[1]
+    )
+    assert called_payload.reasoning_effort == "high"
+    assert called_payload.verbosity == "medium"
+    assert called_payload.max_completion_tokens == 321
+
+
 def test_streaming_echo_returns_sse_and_usage() -> None:
     with make_client() as client:
         response = client.post(
@@ -220,6 +278,50 @@ def test_streaming_replicate_preflight_error_returns_502() -> None:
         )
 
     assert response.status_code == 502
+
+
+def test_streaming_chat_completions_passes_request_model_options() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_client.create_reply_stream = AsyncMock(
+            return_value=EmptyReplyStream()
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "stream": True,
+                "reasoning_effort": "high",
+                "verbosity": "medium",
+                "max_completion_tokens": 222,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    called_payload = (
+        client.app.state.services.replicate_client.create_reply_stream.await_args.args[
+            1
+        ]
+    )
+    assert called_payload.reasoning_effort == "high"
+    assert called_payload.verbosity == "medium"
+    assert called_payload.max_completion_tokens == 222
+
+
+def test_chat_completions_rejects_invalid_model_options() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "reasoning_effort": "invalid",
+                "verbosity": "loud",
+                "max_completion_tokens": 0,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 422
 
 
 def test_load_settings_reads_env() -> None:

@@ -5,7 +5,7 @@ import httpx
 
 from app.clients.replicate import ReplicateClient, ReplicateError
 from app.config import EchoModel, ReplicateModel, Settings
-from app.schemas import ChatMessage
+from app.schemas import ChatCompletionRequest, ChatMessage
 
 
 def make_settings() -> Settings:
@@ -26,14 +26,23 @@ def make_settings() -> Settings:
                 name="gpt-5.4",
             )
         },
-        replicate_reasoning_effort="none",
-        replicate_verbosity="low",
-        replicate_max_completion_tokens=4096,
+        replicate_default_reasoning_effort=None,
+        replicate_default_verbosity=None,
+        replicate_default_max_completion_tokens=None,
         replicate_sync_wait_seconds=60,
         replicate_poll_interval_seconds=0.0,
         replicate_poll_timeout_seconds=1.0,
         replicate_http_timeout_seconds=5.0,
     )
+
+
+def make_payload(**overrides) -> ChatCompletionRequest:
+    payload = {
+        "model": "gpt-5.4",
+        "messages": [ChatMessage(role="user", content="hello")],
+    }
+    payload.update(overrides)
+    return ChatCompletionRequest(**payload)
 
 
 def test_replicate_client_returns_sync_output() -> None:
@@ -55,7 +64,7 @@ def test_replicate_client_returns_sync_output() -> None:
             client = ReplicateClient(make_settings(), http_client=http_client)
             reply = await client.create_reply(
                 make_settings().replicate_model_map["gpt-5.4"],
-                [ChatMessage(role="user", content="say hello")],
+                make_payload(messages=[ChatMessage(role="user", content="say hello")]),
             )
 
         assert reply == "hello world"
@@ -65,6 +74,9 @@ def test_replicate_client_returns_sync_output() -> None:
         body = json.loads(calls[0].content)
         assert body["stream"] is False
         assert body["input"]["messages"] == [{"role": "user", "content": "say hello"}]
+        assert "reasoning_effort" not in body["input"]
+        assert "verbosity" not in body["input"]
+        assert "max_completion_tokens" not in body["input"]
 
     asyncio.run(run())
 
@@ -106,7 +118,9 @@ def test_replicate_client_streams_output_events() -> None:
             client = ReplicateClient(make_settings(), http_client=http_client)
             reply_stream = await client.create_reply_stream(
                 make_settings().replicate_model_map["gpt-5.4"],
-                [ChatMessage(role="user", content="stream hello")],
+                make_payload(
+                    messages=[ChatMessage(role="user", content="stream hello")]
+                ),
             )
             chunks = [chunk async for chunk in reply_stream.iter_output()]
 
@@ -131,7 +145,7 @@ def test_replicate_client_stream_preflight_falls_back_to_ready_output() -> None:
             client = ReplicateClient(make_settings(), http_client=http_client)
             reply_stream = await client.create_reply_stream(
                 make_settings().replicate_model_map["gpt-5.4"],
-                [ChatMessage(role="user", content="ready")],
+                make_payload(messages=[ChatMessage(role="user", content="ready")]),
             )
             chunks = [chunk async for chunk in reply_stream.iter_output()]
 
@@ -169,7 +183,7 @@ def test_replicate_client_polls_until_output_ready() -> None:
             client = ReplicateClient(make_settings(), http_client=http_client)
             reply = await client.create_reply(
                 make_settings().replicate_model_map["gpt-5.4"],
-                [ChatMessage(role="user", content="say done")],
+                make_payload(messages=[ChatMessage(role="user", content="say done")]),
             )
 
         assert reply == "done"
@@ -191,11 +205,78 @@ def test_replicate_client_raises_on_failed_prediction() -> None:
             try:
                 await client.create_reply(
                     make_settings().replicate_model_map["gpt-5.4"],
-                    [ChatMessage(role="user", content="fail")],
+                    make_payload(messages=[ChatMessage(role="user", content="fail")]),
                 )
             except ReplicateError as exc:
                 assert "boom" in str(exc)
             else:
                 raise AssertionError("ReplicateError was not raised")
+
+    asyncio.run(run())
+
+
+def test_replicate_client_passes_request_options() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=make_settings().replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(make_settings(), http_client=http_client)
+            await client.create_reply(
+                make_settings().replicate_model_map["gpt-5.4"],
+                make_payload(
+                    reasoning_effort="high",
+                    verbosity="medium",
+                    max_completion_tokens=321,
+                ),
+            )
+
+        body = json.loads(calls[0].content)
+        assert body["input"]["reasoning_effort"] == "high"
+        assert body["input"]["verbosity"] == "medium"
+        assert body["input"]["max_completion_tokens"] == 321
+
+    asyncio.run(run())
+
+
+def test_replicate_client_uses_env_defaults_when_request_omits_options() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
+
+    async def run() -> None:
+        settings = make_settings()
+        settings = Settings(
+            **{
+                **settings.__dict__,
+                "replicate_default_reasoning_effort": "medium",
+                "replicate_default_verbosity": "low",
+                "replicate_default_max_completion_tokens": 512,
+            }
+        )
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=settings.replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(settings, http_client=http_client)
+            await client.create_reply(
+                settings.replicate_model_map["gpt-5.4"],
+                make_payload(),
+            )
+
+        body = json.loads(calls[0].content)
+        assert body["input"]["reasoning_effort"] == "medium"
+        assert body["input"]["verbosity"] == "low"
+        assert body["input"]["max_completion_tokens"] == 512
 
     asyncio.run(run())
