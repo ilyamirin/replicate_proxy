@@ -1,0 +1,25 @@
+[project]
+name = "replicate-proxy"
+version = "0.1.0"
+description = "Minimal FastAPI OpenAI-compatible chat completions server"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.116,<1.0",
+    "python-dotenv>=1.0,<2.0",
+    "uvicorn>=0.35,<1.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "httpx>=0.28,<1.0",
+    "pytest>=8.3,<9.0",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
