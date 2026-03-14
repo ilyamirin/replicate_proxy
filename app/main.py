@@ -110,7 +110,7 @@ async def create_model_reply(
 ) -> str:
     if isinstance(model, EchoModel):
         return await services.echo_service.create_reply(payload.messages)
-    return await services.replicate_client.create_reply(model, payload.messages)
+    return await services.replicate_client.create_reply(model, payload)
 
 
 async def stream_chat_completion(
@@ -217,7 +217,7 @@ async def prepare_model_stream(
 ):
     if isinstance(model, EchoModel):
         return None
-    return await services.replicate_client.create_reply_stream(model, payload.messages)
+    return await services.replicate_client.create_reply_stream(model, payload)
 
 
 app = create_app()

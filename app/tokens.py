@@ -6,7 +6,7 @@ from pathlib import Path
 
 import tiktoken
 
-from app.schemas import ChatMessage, Usage
+from app.schemas import ChatMessage, Usage, content_to_string
 
 O200K_BASE_URL = (
     "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
@@ -35,7 +35,7 @@ class TokenCounter:
         for message in messages:
             total += 3
             total += len(self._encoding.encode(message.role))
-            total += len(self._encoding.encode(message.content))
+            total += len(self._encoding.encode(content_to_string(message.content)))
         return total
 
     def build_usage(

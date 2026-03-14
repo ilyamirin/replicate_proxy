@@ -1,4 +1,4 @@
-from app.schemas import ChatMessage
+from app.schemas import ChatMessage, content_to_string
 
 
 class EchoService:
@@ -8,5 +8,5 @@ class EchoService:
     async def create_reply(self, messages: list[ChatMessage]) -> str:
         for message in reversed(messages):
             if message.role == "user":
-                return message.content
+                return content_to_string(message.content)
         return self.empty_response

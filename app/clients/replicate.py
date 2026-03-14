@@ -9,7 +9,7 @@ from time import monotonic
 import httpx
 
 from app.config import ReplicateModel, Settings
-from app.schemas import ChatMessage
+from app.schemas import ChatCompletionRequest
 
 TERMINAL_STATUSES = {"failed", "canceled", "aborted", "succeeded"}
 
@@ -66,17 +66,17 @@ class ReplicateClient:
     async def create_reply(
         self,
         model: ReplicateModel,
-        messages: list[ChatMessage],
+        payload: ChatCompletionRequest,
     ) -> str:
-        prediction = await self._create_prediction(model, messages, stream=False)
+        prediction = await self._create_prediction(model, payload, stream=False)
         return await self._resolve_output(prediction)
 
     async def create_reply_stream(
         self,
         model: ReplicateModel,
-        messages: list[ChatMessage],
+        payload: ChatCompletionRequest,
     ) -> ReplicateReplyStream:
-        prediction = await self._create_prediction(model, messages, stream=True)
+        prediction = await self._create_prediction(model, payload, stream=True)
         stream_url = prediction.get("urls", {}).get("stream")
         if not stream_url:
             resolved_prediction = prediction
@@ -93,7 +93,7 @@ class ReplicateClient:
     async def _create_prediction(
         self,
         model: ReplicateModel,
-        messages: list[ChatMessage],
+        payload: ChatCompletionRequest,
         *,
         stream: bool,
     ) -> dict:
@@ -103,14 +103,7 @@ class ReplicateClient:
             headers={"Prefer": f"wait={self.settings.replicate_sync_wait_seconds}"},
             json={
                 "stream": stream,
-                "input": {
-                    "messages": [message.model_dump() for message in messages],
-                    "reasoning_effort": self.settings.replicate_reasoning_effort,
-                    "verbosity": self.settings.replicate_verbosity,
-                    "max_completion_tokens": (
-                        self.settings.replicate_max_completion_tokens
-                    ),
-                },
+                "input": self._build_input(payload),
             },
         )
         return response.json()
@@ -195,9 +188,39 @@ class ReplicateClient:
             headers.update(extra)
         return headers
 
+    def _build_input(self, payload: ChatCompletionRequest) -> dict:
+        input_payload = {
+            "messages": [
+                message.model_dump(exclude_none=True) for message in payload.messages
+            ]
+        }
+        reasoning_effort = self._pick_option(
+            payload.reasoning_effort,
+            self.settings.replicate_default_reasoning_effort,
+        )
+        verbosity = self._pick_option(
+            payload.verbosity,
+            self.settings.replicate_default_verbosity,
+        )
+        max_completion_tokens = self._pick_option(
+            payload.max_completion_tokens,
+            self.settings.replicate_default_max_completion_tokens,
+        )
+        if reasoning_effort is not None:
+            input_payload["reasoning_effort"] = reasoning_effort
+        if verbosity is not None:
+            input_payload["verbosity"] = verbosity
+        if max_completion_tokens is not None:
+            input_payload["max_completion_tokens"] = max_completion_tokens
+        return input_payload
+
     @staticmethod
     def _prediction_url(model: ReplicateModel) -> str:
         return f"/models/{model.owner}/{model.name}/predictions"
+
+    @staticmethod
+    def _pick_option(request_value, default_value):
+        return request_value if request_value is not None else default_value
 
     @staticmethod
     def _coerce_output(prediction: dict) -> str | None:
