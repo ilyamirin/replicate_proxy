@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 
 from app.clients.replicate_qwen_edit import ReplicateQwenEditClient
-from app.config import EchoModel, ReplicateModel, Settings
+from app.config import AssistantModel, EchoModel, ReplicateModel, Settings
 from app.tool_schemas import QwenImageEditRequest
 
 
@@ -27,10 +27,18 @@ def make_settings(tmp_dir: Path | None = None) -> Settings:
         app_name="Test App",
         app_host="127.0.0.1",
         app_port=8000,
+        app_log_level="INFO",
         api_prefix="/v1",
         health_path="/health",
+        public_base_url=None,
+        media_path="/media",
+        media_root="artifacts",
         echo_empty_response="",
         echo_model=EchoModel(public_id="echo"),
+        assistant_model=AssistantModel(public_id="assistant"),
+        assistant_router_model_id="gpt-5-nano",
+        assistant_full_model_id="gpt-5.4",
+        assistant_sqlite_path="data/test-langgraph.sqlite",
         replicate_api_token="token",
         replicate_base_url="https://api.replicate.com/v1",
         replicate_model_map={},
@@ -58,6 +66,8 @@ def make_settings(tmp_dir: Path | None = None) -> Settings:
         replicate_poll_interval_seconds=0.0,
         replicate_poll_timeout_seconds=1.0,
         replicate_http_timeout_seconds=5.0,
+        replicate_transport_retries=2,
+        replicate_transport_retry_backoff_seconds=0.0,
     )
 
 

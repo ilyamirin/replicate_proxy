@@ -1,6 +1,8 @@
 # Runtime
 fastapi>=0.116,<1.0
 httpx>=0.28,<1.0
+langgraph>=1.1,<2.0
+langgraph-checkpoint-sqlite>=3.0,<4.0
 pydantic>=2.7,<3.0
 python-dotenv>=1.0,<2.0
 tiktoken>=0.9,<1.0

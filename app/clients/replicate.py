@@ -10,6 +10,7 @@ import httpx
 
 from app.clients.errors import ReplicateError
 from app.clients.replicate_files import ReplicateFilesClient
+from app.clients.retry import retry_transport
 from app.config import ReplicateModel, Settings
 from app.schemas import ChatCompletionRequest
 
@@ -171,11 +172,16 @@ class ReplicateClient:
         if not self.settings.replicate_api_token:
             raise ReplicateError("REPLICATE_API_TOKEN is not set.")
 
-        response = await self._http_client.request(
-            method,
-            url,
-            headers=self._headers(kwargs.pop("headers", None)),
-            **kwargs,
+        response = await retry_transport(
+            lambda: self._http_client.request(
+                method,
+                url,
+                headers=self._headers(kwargs.pop("headers", None)),
+                **kwargs,
+            ),
+            retries=self.settings.replicate_transport_retries,
+            backoff_seconds=self.settings.replicate_transport_retry_backoff_seconds,
+            error_prefix="Replicate transport error",
         )
         if response.is_error:
             raise ReplicateError(

@@ -4,7 +4,13 @@ from unittest.mock import AsyncMock
 from fastapi.testclient import TestClient
 
 from app.clients.replicate import ReplicateError
-from app.config import EchoModel, ReplicateModel, Settings, load_settings
+from app.config import (
+    AssistantModel,
+    EchoModel,
+    ReplicateModel,
+    Settings,
+    load_settings,
+)
 from app.main import create_app
 from app.tool_schemas import ImageGenerationResponse, QwenImageEditResponse
 
@@ -14,10 +20,18 @@ def make_settings() -> Settings:
         app_name="Test App",
         app_host="127.0.0.1",
         app_port=8000,
+        app_log_level="INFO",
         api_prefix="/v1",
         health_path="/health",
+        public_base_url=None,
+        media_path="/media",
+        media_root="artifacts",
         echo_empty_response="",
         echo_model=EchoModel(public_id="echo"),
+        assistant_model=AssistantModel(public_id="assistant"),
+        assistant_router_model_id="gpt-5-nano",
+        assistant_full_model_id="gpt-5.4",
+        assistant_sqlite_path="data/test-langgraph.sqlite",
         replicate_api_token="token",
         replicate_base_url="https://api.replicate.com/v1",
         replicate_model_map={
@@ -56,6 +70,8 @@ def make_settings() -> Settings:
         replicate_poll_interval_seconds=0.0,
         replicate_poll_timeout_seconds=1.0,
         replicate_http_timeout_seconds=5.0,
+        replicate_transport_retries=2,
+        replicate_transport_retry_backoff_seconds=0.0,
     )
 
 
@@ -171,6 +187,12 @@ def test_models_lists_available_models() -> None:
         "data": [
             {
                 "id": "echo",
+                "object": "model",
+                "created": 0,
+                "owned_by": "local",
+            },
+            {
+                "id": "assistant",
                 "object": "model",
                 "created": 0,
                 "owned_by": "local",
@@ -374,6 +396,122 @@ def test_chat_completions_returns_400_for_unknown_model() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Unknown model: unknown-model"
+
+
+def test_assistant_model_uses_graph_service() -> None:
+    with make_client() as client:
+        client.app.state.services.assistant_graph_service.create_reply = AsyncMock(
+            return_value="assistant reply"
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "assistant",
+                "user": "user-1",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["choices"][0]["message"]["content"] == "assistant reply"
+
+
+def test_assistant_model_reads_openwebui_headers() -> None:
+    with make_client() as client:
+        client.app.state.services.assistant_graph_service.create_reply = AsyncMock(
+            return_value="assistant via headers"
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "X-OpenWebUI-Chat-Id": "chat-123",
+                "X-OpenWebUI-User-Id": "user-456",
+                "X-OpenWebUI-User-Name": "Ilya",
+            },
+            json={
+                "model": "assistant",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    called_payload = (
+        client.app.state.services.assistant_graph_service.create_reply.await_args.args[
+            0
+        ]
+    )
+    assert called_payload.metadata["conversation_id"] == "chat-123"
+    assert called_payload.metadata["openwebui_user_name"] == "Ilya"
+    assert called_payload.user == "user-456"
+    assert (
+        response.json()["choices"][0]["message"]["content"] == "assistant via headers"
+    )
+
+
+def test_assistant_model_requires_conversation_id_or_user() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "assistant",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_assistant_stream_reads_openwebui_headers() -> None:
+    with make_client() as client:
+        client.app.state.services.assistant_graph_service.create_reply = AsyncMock(
+            return_value="stream ok"
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "X-OpenWebUI-Chat-Id": "chat-stream-1",
+                "X-OpenWebUI-User-Id": "user-stream-1",
+            },
+            json={
+                "model": "assistant",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    events = parse_sse(response.text)
+    assert events[0]["choices"][0]["delta"]["role"] == "assistant"
+    assert events[1]["choices"][0]["delta"]["content"] == "stream ok"
+    called_payload = (
+        client.app.state.services.assistant_graph_service.create_reply.await_args.args[
+            0
+        ]
+    )
+    assert called_payload.metadata["conversation_id"] == "chat-stream-1"
+    assert called_payload.user == "user-stream-1"
+
+
+def test_assistant_stream_preflight_error_returns_502() -> None:
+    with make_client() as client:
+        client.app.state.services.assistant_graph_service.create_reply = AsyncMock(
+            side_effect=ReplicateError("router failed")
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            headers={
+                "X-OpenWebUI-Chat-Id": "chat-stream-err",
+                "X-OpenWebUI-User-Id": "user-stream-err",
+            },
+            json={
+                "model": "assistant",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "router failed"
 
 
 def test_chat_completions_uses_requested_replicate_model() -> None:

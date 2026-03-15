@@ -16,6 +16,11 @@ class EchoModel:
 
 
 @dataclass(frozen=True)
+class AssistantModel:
+    public_id: str
+
+
+@dataclass(frozen=True)
 class ReplicateModel:
     public_id: str
     owner: str
@@ -27,10 +32,18 @@ class Settings:
     app_name: str
     app_host: str
     app_port: int
+    app_log_level: str
     api_prefix: str
     health_path: str
+    public_base_url: str | None
+    media_path: str
+    media_root: str
     echo_empty_response: str
     echo_model: EchoModel
+    assistant_model: AssistantModel
+    assistant_router_model_id: str
+    assistant_full_model_id: str
+    assistant_sqlite_path: str
     replicate_api_token: str
     replicate_base_url: str
     replicate_model_map: dict[str, ReplicateModel]
@@ -50,6 +63,8 @@ class Settings:
     replicate_poll_interval_seconds: float
     replicate_poll_timeout_seconds: float
     replicate_http_timeout_seconds: float
+    replicate_transport_retries: int
+    replicate_transport_retry_backoff_seconds: float
 
 
 def _normalize_path(path: str) -> str:
@@ -116,10 +131,22 @@ def load_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "Minimal OpenAI Chat Completions Server"),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         app_port=int(os.getenv("APP_PORT", "8000")),
+        app_log_level=os.getenv("APP_LOG_LEVEL", "INFO").upper(),
         api_prefix=_normalize_path(os.getenv("APP_API_PREFIX", "/v1")),
         health_path=_normalize_path(os.getenv("APP_HEALTH_PATH", "/health")),
+        public_base_url=_optional_str_env("APP_PUBLIC_BASE_URL"),
+        media_path=_normalize_path(os.getenv("APP_MEDIA_PATH", "/media")),
+        media_root=os.getenv("APP_MEDIA_ROOT", "artifacts"),
         echo_empty_response=os.getenv("APP_ECHO_EMPTY_RESPONSE", ""),
         echo_model=EchoModel(public_id=os.getenv("ECHO_MODEL_ID", "echo")),
+        assistant_model=AssistantModel(
+            public_id=os.getenv("ASSISTANT_MODEL_ID", "assistant")
+        ),
+        assistant_router_model_id=os.getenv("ASSISTANT_ROUTER_MODEL_ID", "gpt-5-nano"),
+        assistant_full_model_id=os.getenv("ASSISTANT_FULL_MODEL_ID", "gpt-5.4"),
+        assistant_sqlite_path=os.getenv(
+            "ASSISTANT_SQLITE_PATH", "data/langgraph.sqlite"
+        ),
         replicate_api_token=os.getenv("REPLICATE_API_TOKEN", ""),
         replicate_base_url=os.getenv(
             "REPLICATE_BASE_URL", "https://api.replicate.com/v1"
@@ -178,6 +205,10 @@ def load_settings() -> Settings:
         replicate_http_timeout_seconds=float(
             os.getenv("REPLICATE_HTTP_TIMEOUT_SECONDS", "90")
         ),
+        replicate_transport_retries=int(os.getenv("REPLICATE_TRANSPORT_RETRIES", "2")),
+        replicate_transport_retry_backoff_seconds=float(
+            os.getenv("REPLICATE_TRANSPORT_RETRY_BACKOFF_SECONDS", "0.5")
+        ),
     )
 
 
@@ -186,10 +217,18 @@ def snapshot_settings(settings: Settings) -> Settings:
         app_name=settings.app_name,
         app_host=settings.app_host,
         app_port=settings.app_port,
+        app_log_level=settings.app_log_level,
         api_prefix=settings.api_prefix,
         health_path=settings.health_path,
+        public_base_url=settings.public_base_url,
+        media_path=settings.media_path,
+        media_root=settings.media_root,
         echo_empty_response=settings.echo_empty_response,
         echo_model=EchoModel(public_id=settings.echo_model.public_id),
+        assistant_model=AssistantModel(public_id=settings.assistant_model.public_id),
+        assistant_router_model_id=settings.assistant_router_model_id,
+        assistant_full_model_id=settings.assistant_full_model_id,
+        assistant_sqlite_path=settings.assistant_sqlite_path,
         replicate_api_token=settings.replicate_api_token,
         replicate_base_url=settings.replicate_base_url,
         replicate_model_map=dict(settings.replicate_model_map),
@@ -223,4 +262,8 @@ def snapshot_settings(settings: Settings) -> Settings:
         replicate_poll_interval_seconds=settings.replicate_poll_interval_seconds,
         replicate_poll_timeout_seconds=settings.replicate_poll_timeout_seconds,
         replicate_http_timeout_seconds=settings.replicate_http_timeout_seconds,
+        replicate_transport_retries=settings.replicate_transport_retries,
+        replicate_transport_retry_backoff_seconds=(
+            settings.replicate_transport_retry_backoff_seconds
+        ),
     )

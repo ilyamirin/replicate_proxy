@@ -8,11 +8,13 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.backends import AppServices, build_services
 from app.clients.errors import InputValidationError
 from app.clients.replicate import ReplicateError
 from app.config import (
+    AssistantModel,
     EchoModel,
     ReplicateModel,
     Settings,
@@ -48,6 +50,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.state.services = services
+    app.mount(
+        settings.media_path,
+        StaticFiles(directory=settings.media_root, check_dir=False),
+        name="media",
+    )
 
     @app.get(settings.health_path)
     async def healthcheck() -> dict[str, str]:
@@ -56,7 +63,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get(f"{settings.api_prefix}/models", response_model=ModelListResponse)
     async def list_models() -> ModelListResponse:
         return ModelListResponse(
-            data=[ModelCard(id=settings.echo_model.public_id, owned_by="local")]
+            data=[
+                ModelCard(id=settings.echo_model.public_id, owned_by="local"),
+                ModelCard(id=settings.assistant_model.public_id, owned_by="local"),
+            ]
             + [
                 ModelCard(id=model.public_id, owned_by=model.owner)
                 for model in settings.replicate_model_map.values()
@@ -133,22 +143,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=400, detail=f"Unknown model: {payload.model}"
             )
+        if isinstance(model, AssistantModel):
+            enrich_assistant_payload_from_headers(request, payload)
         validate_model_payload(services.settings, model, payload)
+        if isinstance(model, AssistantModel):
+            try:
+                services.assistant_graph_service.require_conversation_id(payload)
+            except InputValidationError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         if payload.stream:
             try:
-                prepared_stream = await prepare_model_stream(services, model, payload)
+                prepared_reply, prepared_stream = await prepare_model_stream(
+                    services,
+                    model,
+                    payload,
+                    request_base_url=str(request.base_url),
+                )
             except InputValidationError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
             except ReplicateError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
             return StreamingResponse(
-                stream_chat_completion(services, payload, model, prepared_stream),
+                stream_chat_completion(
+                    services,
+                    payload,
+                    model,
+                    prepared_reply,
+                    prepared_stream,
+                    request_base_url=str(request.base_url),
+                ),
                 media_type="text/event-stream",
             )
 
         try:
-            reply = await create_model_reply(services, model, payload)
+            reply = await create_model_reply(
+                services,
+                model,
+                payload,
+                request_base_url=str(request.base_url),
+            )
         except InputValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ReplicateError as exc:
@@ -173,28 +207,40 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 def resolve_model(
     settings: Settings,
     public_id: str,
-) -> EchoModel | ReplicateModel | None:
+) -> AssistantModel | EchoModel | ReplicateModel | None:
     if public_id == settings.echo_model.public_id:
         return settings.echo_model
+    if public_id == settings.assistant_model.public_id:
+        return settings.assistant_model
     return settings.replicate_model_map.get(public_id)
 
 
 async def create_model_reply(
     services: AppServices,
-    model: EchoModel | ReplicateModel,
+    model: AssistantModel | EchoModel | ReplicateModel,
     payload: ChatCompletionRequest,
+    *,
+    request_base_url: str,
 ) -> str:
     messages = build_messages_from_request(payload)
     if isinstance(model, EchoModel):
         return await services.echo_service.create_reply(messages)
+    if isinstance(model, AssistantModel):
+        return await services.assistant_graph_service.create_reply(
+            payload,
+            request_base_url=request_base_url,
+        )
     return await services.replicate_client.create_reply(model, payload)
 
 
 async def stream_chat_completion(
     services: AppServices,
     payload: ChatCompletionRequest,
-    model: EchoModel | ReplicateModel,
+    model: AssistantModel | EchoModel | ReplicateModel,
+    prepared_reply: str | None,
     prepared_stream,
+    *,
+    request_base_url: str,
 ) -> AsyncIterator[bytes]:
     chat_id = f"chatcmpl-{uuid4().hex}"
     created = int(time())
@@ -215,7 +261,32 @@ async def stream_chat_completion(
 
     try:
         if isinstance(model, EchoModel):
-            reply = await services.echo_service.create_reply(messages)
+            reply = prepared_reply or await services.echo_service.create_reply(messages)
+            if reply:
+                text_parts.append(reply)
+                yield sse_chunk(
+                    {
+                        "id": chat_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": payload.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": reply},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+        elif isinstance(model, AssistantModel):
+            reply = (
+                prepared_reply
+                or await services.assistant_graph_service.create_reply(
+                    payload,
+                    request_base_url=request_base_url,
+                )
+            )
             if reply:
                 text_parts.append(reply)
                 yield sse_chunk(
@@ -253,8 +324,13 @@ async def stream_chat_completion(
                         ],
                     }
                 )
-    except ReplicateError as exc:
-        yield sse_chunk({"error": {"message": str(exc), "type": "replicate_error"}})
+    except (InputValidationError, ReplicateError) as exc:
+        error_type = (
+            "input_validation_error"
+            if isinstance(exc, InputValidationError)
+            else "replicate_error"
+        )
+        yield sse_chunk({"error": {"message": str(exc), "type": error_type}})
         yield b"data: [DONE]\n\n"
         return
 
@@ -290,20 +366,31 @@ def sse_chunk(payload: dict) -> bytes:
 
 async def prepare_model_stream(
     services: AppServices,
-    model: EchoModel | ReplicateModel,
+    model: AssistantModel | EchoModel | ReplicateModel,
     payload: ChatCompletionRequest,
+    *,
+    request_base_url: str,
 ):
     if isinstance(model, EchoModel):
-        return None
-    return await services.replicate_client.create_reply_stream(model, payload)
+        reply = await services.echo_service.create_reply(
+            build_messages_from_request(payload)
+        )
+        return reply, None
+    if isinstance(model, AssistantModel):
+        reply = await services.assistant_graph_service.create_reply(
+            payload,
+            request_base_url=request_base_url,
+        )
+        return reply, None
+    return None, await services.replicate_client.create_reply_stream(model, payload)
 
 
 def validate_model_payload(
     _: Settings,
-    model: EchoModel | ReplicateModel,
+    model: AssistantModel | EchoModel | ReplicateModel,
     payload: ChatCompletionRequest,
 ) -> None:
-    if isinstance(model, EchoModel):
+    if isinstance(model, (EchoModel, AssistantModel)):
         return
 
     allowed = allowed_reasoning_efforts(model)
@@ -325,6 +412,31 @@ def validate_model_payload(
                 f"for model {model.public_id}; allowed: {allowed_text}"
             ),
         )
+
+
+def enrich_assistant_payload_from_headers(
+    request: Request,
+    payload: ChatCompletionRequest,
+) -> None:
+    chat_id = request.headers.get("X-OpenWebUI-Chat-Id", "").strip()
+    user_id = request.headers.get("X-OpenWebUI-User-Id", "").strip()
+    message_id = request.headers.get("X-OpenWebUI-Message-Id", "").strip()
+    user_name = request.headers.get("X-OpenWebUI-User-Name", "").strip()
+    user_email = request.headers.get("X-OpenWebUI-User-Email", "").strip()
+    user_role = request.headers.get("X-OpenWebUI-User-Role", "").strip()
+
+    if chat_id and not str(payload.metadata.get("conversation_id", "")).strip():
+        payload.metadata["conversation_id"] = chat_id
+    if message_id and not str(payload.metadata.get("openwebui_message_id", "")).strip():
+        payload.metadata["openwebui_message_id"] = message_id
+    if user_id and not payload.user:
+        payload.user = user_id
+    if user_name and not str(payload.metadata.get("openwebui_user_name", "")).strip():
+        payload.metadata["openwebui_user_name"] = user_name
+    if user_email and not str(payload.metadata.get("openwebui_user_email", "")).strip():
+        payload.metadata["openwebui_user_email"] = user_email
+    if user_role and not str(payload.metadata.get("openwebui_user_role", "")).strip():
+        payload.metadata["openwebui_user_role"] = user_role
 
 
 app = create_app()

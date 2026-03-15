@@ -6,7 +6,13 @@ from pathlib import Path
 
 import tiktoken
 
-from app.schemas import ChatMessage, Usage, content_to_string
+from app.schemas import (
+    ChatMessage,
+    InputImagePart,
+    InputTextPart,
+    MessageContent,
+    Usage,
+)
 
 O200K_BASE_URL = (
     "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
@@ -22,6 +28,10 @@ CACHED_O200K_FILE = TIKTOKEN_CACHE_DIR / TIKTOKEN_CACHE_KEY
 
 
 class TokenCounter:
+    IMAGE_TOKENS_LOW = 85
+    IMAGE_TOKENS_AUTO = 85
+    IMAGE_TOKENS_HIGH = 170
+
     def __init__(self) -> None:
         self._prepare_cache()
         os.environ["TIKTOKEN_CACHE_DIR"] = str(TIKTOKEN_CACHE_DIR)
@@ -35,8 +45,28 @@ class TokenCounter:
         for message in messages:
             total += 3
             total += len(self._encoding.encode(message.role))
-            total += len(self._encoding.encode(content_to_string(message.content)))
+            total += self.count_content(message.content)
         return total
+
+    def count_content(self, content: MessageContent) -> int:
+        if isinstance(content, str):
+            return self.count_text(content)
+
+        total = 0
+        for part in content:
+            if isinstance(part, InputTextPart):
+                total += self.count_text(part.text)
+            elif isinstance(part, InputImagePart):
+                total += self.count_image(part)
+        return total
+
+    def count_image(self, part: InputImagePart) -> int:
+        detail = part.image_url.detail or "auto"
+        if detail == "high":
+            return self.IMAGE_TOKENS_HIGH
+        if detail == "low":
+            return self.IMAGE_TOKENS_LOW
+        return self.IMAGE_TOKENS_AUTO
 
     def build_usage(
         self,

@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.clients.errors import InputValidationError, ReplicateError
+from app.clients.retry import retry_transport
 from app.config import Settings
 
 REPLICATE_FILE_PREFIX = "https://api.replicate.com/v1/files/"
@@ -60,7 +61,12 @@ class ReplicateFilesClient:
         return uploaded_url
 
     async def _upload_remote_url(self, source: str) -> str:
-        response = await self._download_client.get(source)
+        response = await retry_transport(
+            lambda: self._download_client.get(source),
+            retries=self.settings.replicate_transport_retries,
+            backoff_seconds=self.settings.replicate_transport_retry_backoff_seconds,
+            error_prefix="Replicate image download transport error",
+        )
         if response.is_error:
             raise ReplicateError(
                 f"Image download error {response.status_code} for {source}: "
@@ -81,10 +87,17 @@ class ReplicateFilesClient:
         if not self.settings.replicate_api_token:
             raise ReplicateError("REPLICATE_API_TOKEN is not set.")
 
-        response = await self._http_client.post(
-            "/files",
-            headers={"Authorization": f"Bearer {self.settings.replicate_api_token}"},
-            files={"content": (filename, content, content_type)},
+        response = await retry_transport(
+            lambda: self._http_client.post(
+                "/files",
+                headers={
+                    "Authorization": f"Bearer {self.settings.replicate_api_token}"
+                },
+                files={"content": (filename, content, content_type)},
+            ),
+            retries=self.settings.replicate_transport_retries,
+            backoff_seconds=self.settings.replicate_transport_retry_backoff_seconds,
+            error_prefix="Replicate file upload transport error",
         )
         if response.is_error:
             raise ReplicateError(

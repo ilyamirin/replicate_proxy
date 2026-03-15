@@ -1,5 +1,5 @@
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -40,6 +40,8 @@ class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     model: str
+    user: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     messages: list[ChatMessage] = Field(default_factory=list)
     stream: bool = False
     stream_options: "StreamOptions | None" = None

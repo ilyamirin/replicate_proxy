@@ -1,3 +1,5 @@
+import base64
+
 from pydantic import ValidationError
 
 from app.schemas import (
@@ -85,6 +87,62 @@ def test_token_counter_counts_multimodal_prompt_content() -> None:
     ]
 
     assert counter.count_messages(multimodal) > counter.count_messages(plain_text)
+
+
+def test_token_counter_does_not_explode_for_data_url_images() -> None:
+    counter = TokenCounter()
+    data_url = "data:image/png;base64," + base64.b64encode(b"x" * 4096).decode("ascii")
+    multimodal = [
+        ChatMessage(
+            role="user",
+            content=[
+                {"type": "text", "text": "describe image"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url, "detail": "high"},
+                },
+            ],
+        )
+    ]
+
+    prompt_tokens = counter.count_messages(multimodal)
+    assert prompt_tokens < 500
+
+
+def test_token_counter_uses_image_detail_weighting() -> None:
+    counter = TokenCounter()
+    low_detail = [
+        ChatMessage(
+            role="user",
+            content=[
+                {"type": "text", "text": "describe image"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/cat.png",
+                        "detail": "low",
+                    },
+                },
+            ],
+        )
+    ]
+    high_detail = [
+        ChatMessage(
+            role="user",
+            content=[
+                {"type": "text", "text": "describe image"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/cat.png",
+                        "detail": "high",
+                    },
+                },
+            ],
+        )
+    ]
+
+    assert counter.count_messages(high_detail) > counter.count_messages(low_detail)
 
 
 def test_build_messages_from_request_uses_native_input_fields() -> None:
