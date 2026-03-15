@@ -113,6 +113,7 @@ def make_settings(tmp_path: Path) -> Settings:
         app_name="Test App",
         app_host="127.0.0.1",
         app_port=8000,
+        app_reload=False,
         app_log_level="INFO",
         api_prefix="/v1",
         health_path="/health",

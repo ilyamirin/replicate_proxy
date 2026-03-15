@@ -23,6 +23,7 @@ def main() -> None:
         "app.main:app",
         host=settings.app_host,
         port=settings.app_port,
+        reload=settings.app_reload,
         log_level=settings.app_log_level.lower(),
         log_config=_build_log_config(settings.app_log_level),
     )

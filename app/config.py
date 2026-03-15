@@ -32,6 +32,7 @@ class Settings:
     app_name: str
     app_host: str
     app_port: int
+    app_reload: bool
     app_log_level: str
     api_prefix: str
     health_path: str
@@ -131,6 +132,7 @@ def load_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "Minimal OpenAI Chat Completions Server"),
         app_host=os.getenv("APP_HOST", "127.0.0.1"),
         app_port=int(os.getenv("APP_PORT", "8000")),
+        app_reload=_bool_env("APP_RELOAD", True),
         app_log_level=os.getenv("APP_LOG_LEVEL", "INFO").upper(),
         api_prefix=_normalize_path(os.getenv("APP_API_PREFIX", "/v1")),
         health_path=_normalize_path(os.getenv("APP_HEALTH_PATH", "/health")),
@@ -217,6 +219,7 @@ def snapshot_settings(settings: Settings) -> Settings:
         app_name=settings.app_name,
         app_host=settings.app_host,
         app_port=settings.app_port,
+        app_reload=settings.app_reload,
         app_log_level=settings.app_log_level,
         api_prefix=settings.api_prefix,
         health_path=settings.health_path,
