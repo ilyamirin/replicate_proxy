@@ -59,11 +59,10 @@ Always run these before commit:
 - `REPLICATE_MODEL_MAP` format: `public-id=owner/model-name`
 - Current defaults: `gpt-5.4=openai/gpt-5.4`, `gpt-5-nano=openai/gpt-5-nano`
 - Official prediction endpoint pattern: `POST /v1/models/{owner}/{name}/predictions`
-- The app always sends `messages`
 - Replicate models require the client to send `reasoning_effort`
 - The app also forwards OpenAI-style request fields `verbosity` and `max_completion_tokens` when the client provides them
 - Optional server-side fallback envs exist only for `verbosity` and `max_completion_tokens`
-- The request may use either `messages` or Replicate-native `prompt`, `system_prompt`, and `image_input`
+- Chat requests may use either `messages` or Replicate-native `prompt`, `system_prompt`, and `image_input`
 - `messages[].content` may be a plain string or an OpenAI-style content-part array with `text` and `image_url`
 - The image tool accepts `prompt`, optional `image_input` with up to 14 images, `aspect_ratio`, `resolution`, `google_search`, `image_search`, and `output_format`
 - Image tool inputs may be remote URLs, `data:` URLs, existing Replicate file URLs, or local file paths
@@ -112,3 +111,8 @@ curl -sS -X POST http://127.0.0.1:8000/v1/tools/edit_image_uncensored \
     "output_quality": 95
   }'
 ```
+
+Notes:
+
+- `generate_image` is the general-purpose image tool and should be used for normal image generation/editing tasks.
+- `edit_image_uncensored` is intentionally reserved for the Qwen uncensored editing path.

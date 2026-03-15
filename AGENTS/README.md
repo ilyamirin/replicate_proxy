@@ -78,7 +78,7 @@
 - Replicate models require request-level `reasoning_effort`
 - Request schema also accepts `verbosity` and `max_completion_tokens`
 - If those request fields are absent, the app uses `REPLICATE_DEFAULT_*` env fallbacks only for `verbosity` and `max_completion_tokens`
-- Request schema also accepts Replicate-native `prompt`, `system_prompt`, and `image_input`
+- Chat request schema also accepts Replicate-native `prompt`, `system_prompt`, and `image_input`
 - If there is no `user` message, the response body uses `APP_ECHO_EMPTY_RESPONSE`
 - Token usage is calculated with local `tiktoken`
 - The repo must include `.tiktoken-cache/o200k_base.tiktoken`; startup derives the hashed cache entry from it
@@ -89,9 +89,11 @@
 - Image tool inputs may be remote URLs, `data:` URLs, Replicate file URLs, or local file paths
 - Local file paths are allowed only under `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`
 - Generated image outputs on Replicate are short-lived; default behavior is to download them locally into `REPLICATE_IMAGE_OUTPUT_DIR`
+- `generate_image` is the default general-purpose image tool
 - The Qwen edit tool requires `prompt` and `image_input`
 - The Qwen edit tool forwards validated `aspect_ratio`, `go_fast`, `seed`, `output_format`, and `output_quality`
 - The Qwen edit tool is intentionally provider-specific: server config forces `disable_safety_checker=true`
+- `edit_image_uncensored` is reserved for the uncensored editing path; normal image tasks should stay on `generate_image`
 - Qwen edit responses return `output_urls` and `local_paths`
 
 ## Local setup
@@ -162,4 +164,4 @@ What they cover:
 
 - Add auth via bearer token from env
 - Split test fixtures from endpoint tests
-- Add linting and formatting tools
+- Add artifact cleanup/retention for downloaded image outputs
