@@ -39,6 +39,30 @@ class ImageGenerationRequest(BaseModel):
         return self
 
 
+class QwenImageEditRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    prompt: str = Field(min_length=1)
+    image_input: list[str] = Field(min_length=1)
+    aspect_ratio: (
+        Literal[
+            "match_input_image",
+            "1:1",
+            "16:9",
+            "9:16",
+            "4:3",
+            "3:4",
+            "3:2",
+            "2:3",
+        ]
+        | None
+    ) = None
+    go_fast: bool = True
+    seed: int | None = None
+    output_format: Literal["webp", "jpg", "png"] | None = None
+    output_quality: int | None = Field(default=None, ge=0, le=100)
+
+
 class ToolCard(BaseModel):
     id: str
     object: Literal["tool"] = "tool"
@@ -58,5 +82,16 @@ class ImageGenerationResponse(BaseModel):
     prompt: str
     output_url: str
     local_path: str | None = None
+    output_format: str | None = None
+    prediction_id: str | None = None
+
+
+class QwenImageEditResponse(BaseModel):
+    tool_name: str
+    status: Literal["succeeded"] = "succeeded"
+    model: str
+    prompt: str
+    output_urls: list[str] = Field(default_factory=list)
+    local_paths: list[str] = Field(default_factory=list)
     output_format: str | None = None
     prediction_id: str | None = None

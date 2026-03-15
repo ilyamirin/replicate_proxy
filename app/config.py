@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 DEFAULT_REPLICATE_MODEL_MAP = "gpt-5.4=openai/gpt-5.4"
 DEFAULT_REPLICATE_IMAGE_TOOL_MODEL = "google/nano-banana-2"
+DEFAULT_REPLICATE_QWEN_EDIT_TOOL_MODEL = "qwen/qwen-image-edit-plus"
 DEFAULT_LOCAL_IMAGE_INPUT_ROOTS = "tests/fixtures,artifacts/uploads"
 
 
@@ -37,6 +38,11 @@ class Settings:
     replicate_image_model: ReplicateModel
     replicate_image_output_dir: str
     replicate_image_download_output: bool
+    replicate_qwen_edit_tool_id: str
+    replicate_qwen_edit_model: ReplicateModel
+    replicate_qwen_edit_output_dir: str
+    replicate_qwen_edit_download_output: bool
+    replicate_qwen_edit_force_disable_safety_checker: bool
     replicate_local_image_input_roots: tuple[str, ...]
     replicate_default_verbosity: str | None
     replicate_default_max_completion_tokens: int | None
@@ -134,6 +140,24 @@ def load_settings() -> Settings:
         replicate_image_download_output=_bool_env(
             "REPLICATE_IMAGE_DOWNLOAD_OUTPUT", True
         ),
+        replicate_qwen_edit_tool_id=os.getenv(
+            "REPLICATE_QWEN_EDIT_TOOL_ID", "edit_image_uncensored"
+        ),
+        replicate_qwen_edit_model=_parse_replicate_model(
+            os.getenv(
+                "REPLICATE_QWEN_EDIT_TOOL_MODEL",
+                DEFAULT_REPLICATE_QWEN_EDIT_TOOL_MODEL,
+            )
+        ),
+        replicate_qwen_edit_output_dir=os.getenv(
+            "REPLICATE_QWEN_EDIT_OUTPUT_DIR", "artifacts/qwen-edit"
+        ),
+        replicate_qwen_edit_download_output=_bool_env(
+            "REPLICATE_QWEN_EDIT_DOWNLOAD_OUTPUT", True
+        ),
+        replicate_qwen_edit_force_disable_safety_checker=_bool_env(
+            "REPLICATE_QWEN_EDIT_FORCE_DISABLE_SAFETY_CHECKER", True
+        ),
         replicate_local_image_input_roots=_parse_local_roots_env(
             os.getenv(
                 "REPLICATE_LOCAL_IMAGE_INPUT_ROOTS",
@@ -177,6 +201,17 @@ def snapshot_settings(settings: Settings) -> Settings:
         ),
         replicate_image_output_dir=settings.replicate_image_output_dir,
         replicate_image_download_output=settings.replicate_image_download_output,
+        replicate_qwen_edit_tool_id=settings.replicate_qwen_edit_tool_id,
+        replicate_qwen_edit_model=ReplicateModel(
+            public_id=settings.replicate_qwen_edit_model.public_id,
+            owner=settings.replicate_qwen_edit_model.owner,
+            name=settings.replicate_qwen_edit_model.name,
+        ),
+        replicate_qwen_edit_output_dir=settings.replicate_qwen_edit_output_dir,
+        replicate_qwen_edit_download_output=settings.replicate_qwen_edit_download_output,
+        replicate_qwen_edit_force_disable_safety_checker=(
+            settings.replicate_qwen_edit_force_disable_safety_checker
+        ),
         replicate_local_image_input_roots=tuple(
             settings.replicate_local_image_input_roots
         ),

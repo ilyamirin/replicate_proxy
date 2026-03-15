@@ -175,3 +175,18 @@ curl -sS -X POST http://127.0.0.1:8000/v1/tools/generate_image \
     "output_format": "png"
   }'
 ```
+
+## qwen-image-edit-plus uncensored edit
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/tools/edit_image_uncensored \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Turn this comic cover into a watercolor children'\''s book cover while keeping the crab captain, the robot, and the bridge scene.",
+    "image_input": ["tests/fixtures/vision-comic.jpeg"],
+    "aspect_ratio": "match_input_image",
+    "go_fast": true,
+    "output_format": "png",
+    "output_quality": 95
+  }'
+```

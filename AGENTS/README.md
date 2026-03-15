@@ -3,7 +3,7 @@
 ## Project summary
 
 - Project: `replicate-proxy`
-- Purpose: minimal FastAPI server with OpenAI-compatible `GET /v1/models`, `POST /v1/chat/completions`, and a Replicate-backed image tool
+- Purpose: minimal FastAPI server with OpenAI-compatible `GET /v1/models`, `POST /v1/chat/completions`, and Replicate-backed image tools
 - Current backends: Replicate-backed models plus a local echo model
 - Python version: `3.12`
 - Package/dependency management: `pyproject.toml` + local `.venv`
@@ -23,6 +23,7 @@
 - `app/backends.py`: startup-time service container
 - `app/clients/replicate.py`: Replicate HTTP client with sync, polling, and SSE stream support
 - `app/clients/replicate_images.py`: Replicate client for image generation/editing tools
+- `app/clients/replicate_qwen_edit.py`: Replicate client for `qwen/qwen-image-edit-plus`
 - `app/config.py`: settings loader from env and `.env`, loaded once at service start
 - `app/services.py`: echo business logic
 - `app/schemas.py`: request/response models
@@ -51,6 +52,11 @@
 - `REPLICATE_IMAGE_TOOL_MODEL`: target Replicate image model, default `google/nano-banana-2`
 - `REPLICATE_IMAGE_OUTPUT_DIR`: local output directory for downloaded generated images
 - `REPLICATE_IMAGE_DOWNLOAD_OUTPUT`: if `true`, download generated outputs locally and return `local_path`
+- `REPLICATE_QWEN_EDIT_TOOL_ID`: public id for the Qwen edit tool, default `edit_image_uncensored`
+- `REPLICATE_QWEN_EDIT_TOOL_MODEL`: target Replicate edit model, default `qwen/qwen-image-edit-plus`
+- `REPLICATE_QWEN_EDIT_OUTPUT_DIR`: local output directory for downloaded Qwen edit results
+- `REPLICATE_QWEN_EDIT_DOWNLOAD_OUTPUT`: if `true`, download Qwen outputs locally and return `local_paths`
+- `REPLICATE_QWEN_EDIT_FORCE_DISABLE_SAFETY_CHECKER`: if `true`, always send `disable_safety_checker=true` upstream
 - `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`: comma-separated allowlist for local `image_input` paths, default `tests/fixtures,artifacts/uploads`
 - `REPLICATE_DEFAULT_VERBOSITY`: optional fallback for requests that omit `verbosity`
 - `REPLICATE_DEFAULT_MAX_COMPLETION_TOKENS`: optional fallback for requests that omit `max_completion_tokens`
@@ -65,6 +71,7 @@
 - `GET {APP_API_PREFIX}/tools` returns the internal tool list and JSON schema
 - `POST {APP_API_PREFIX}/chat/completions` returns OpenAI-style JSON
 - `POST {APP_API_PREFIX}/tools/{REPLICATE_IMAGE_TOOL_ID}` runs `google/nano-banana-2`
+- `POST {APP_API_PREFIX}/tools/{REPLICATE_QWEN_EDIT_TOOL_ID}` runs `qwen/qwen-image-edit-plus`
 - If the request `model` equals `ECHO_MODEL_ID`, reply content is the last `user` message from the request
 - All other known models are resolved via `REPLICATE_MODEL_MAP` and sent to Replicate
 - `stream=true` returns OpenAI-style SSE chunks
@@ -82,6 +89,10 @@
 - Image tool inputs may be remote URLs, `data:` URLs, Replicate file URLs, or local file paths
 - Local file paths are allowed only under `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`
 - Generated image outputs on Replicate are short-lived; default behavior is to download them locally into `REPLICATE_IMAGE_OUTPUT_DIR`
+- The Qwen edit tool requires `prompt` and `image_input`
+- The Qwen edit tool forwards validated `aspect_ratio`, `go_fast`, `seed`, `output_format`, and `output_quality`
+- The Qwen edit tool is intentionally provider-specific: server config forces `disable_safety_checker=true`
+- Qwen edit responses return `output_urls` and `local_paths`
 
 ## Local setup
 

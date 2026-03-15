@@ -31,6 +31,7 @@ from app.schemas import (
 )
 from app.tool_schemas import (
     ImageGenerationRequest,
+    QwenImageEditRequest,
     ToolCard,
     ToolListResponse,
 )
@@ -73,7 +74,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "Replicate."
                     ),
                     input_schema=ImageGenerationRequest.model_json_schema(),
-                )
+                ),
+                ToolCard(
+                    id=settings.replicate_qwen_edit_tool_id,
+                    description=(
+                        "Edit images with qwen/qwen-image-edit-plus and force "
+                        "disable_safety_checker=true."
+                    ),
+                    input_schema=QwenImageEditRequest.model_json_schema(),
+                ),
             ]
         )
 
@@ -88,6 +97,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 services.settings.replicate_image_model,
                 payload,
                 tool_name=services.settings.replicate_image_tool_id,
+            )
+        except InputValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ReplicateError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return result.model_dump()
+
+    @app.post(f"{settings.api_prefix}/tools/{settings.replicate_qwen_edit_tool_id}")
+    async def edit_image_tool(
+        request: Request,
+        payload: QwenImageEditRequest,
+    ):
+        services = request.app.state.services
+        try:
+            result = await services.replicate_qwen_edit_client.edit_image(
+                services.settings.replicate_qwen_edit_model,
+                payload,
+                tool_name=services.settings.replicate_qwen_edit_tool_id,
             )
         except InputValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -1,6 +1,6 @@
 # replicate-proxy
 
-Minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, including SSE streaming, plus a Replicate-backed image tool.
+Minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, including SSE streaming, plus Replicate-backed image tools.
 
 ## Config
 
@@ -17,7 +17,7 @@ Settings are loaded once when the service starts.
 Token counting uses local `tiktoken` data from `.tiktoken-cache/o200k_base.tiktoken`.
 The repository must contain `.tiktoken-cache/o200k_base.tiktoken`; startup copies it to the cache key path expected by `tiktoken`.
 Default Replicate models in the config are `gpt-5.4` and `gpt-5-nano`.
-Image generation/editing tool defaults to `google/nano-banana-2`.
+Image tools default to `google/nano-banana-2` and `qwen/qwen-image-edit-plus`.
 
 ## Run
 
@@ -53,6 +53,7 @@ Always run these before commit:
 - `POST /v1/chat/completions` resolves request `model` through `REPLICATE_MODEL_MAP`
 - `POST /v1/chat/completions` routes the local echo model without calling Replicate
 - `POST /v1/tools/generate_image` calls `google/nano-banana-2` on Replicate
+- `POST /v1/tools/edit_image_uncensored` calls `qwen/qwen-image-edit-plus` on Replicate
 - `stream=true` returns real `text/event-stream` chunks
 - Token usage is calculated with local `tiktoken` using `o200k_base`
 - `REPLICATE_MODEL_MAP` format: `public-id=owner/model-name`
@@ -68,6 +69,9 @@ Always run these before commit:
 - Image tool inputs may be remote URLs, `data:` URLs, existing Replicate file URLs, or local file paths
 - Local file paths are restricted to `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`; by default only `tests/fixtures` and `artifacts/uploads` are allowed
 - By default the image tool downloads the generated image into `REPLICATE_IMAGE_OUTPUT_DIR` and returns both `output_url` and `local_path`
+- The Qwen edit tool requires `prompt` plus at least one `image_input`
+- The Qwen edit tool forwards validated `aspect_ratio`, `go_fast`, `seed`, `output_format`, and `output_quality`
+- The Qwen edit tool forces `disable_safety_checker=true` via server config and returns `output_urls` plus local downloaded copies
 - Sync mode uses `Prefer: wait=<seconds>`
 - If Replicate returns an incomplete non-stream prediction, the app polls the `urls.get` URL until completion or timeout
 - Stream errors before the upstream stream starts return normal HTTP `502`
@@ -91,5 +95,20 @@ curl -sS -X POST http://127.0.0.1:8000/v1/tools/generate_image \
     "aspect_ratio": "3:4",
     "resolution": "1K",
     "output_format": "png"
+  }'
+```
+
+Edit an image without the safety checker:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/tools/edit_image_uncensored \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Turn this comic cover into a watercolor children'\''s book cover.",
+    "image_input": ["tests/fixtures/vision-comic.jpeg"],
+    "aspect_ratio": "match_input_image",
+    "go_fast": true,
+    "output_format": "png",
+    "output_quality": 95
   }'
 ```

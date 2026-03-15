@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.clients.replicate import ReplicateError
 from app.config import EchoModel, ReplicateModel, Settings, load_settings
 from app.main import create_app
-from app.tool_schemas import ImageGenerationResponse
+from app.tool_schemas import ImageGenerationResponse, QwenImageEditResponse
 
 
 def make_settings() -> Settings:
@@ -40,6 +40,15 @@ def make_settings() -> Settings:
         ),
         replicate_image_output_dir="artifacts/test-images",
         replicate_image_download_output=True,
+        replicate_qwen_edit_tool_id="edit_image_uncensored",
+        replicate_qwen_edit_model=ReplicateModel(
+            public_id="qwen-image-edit-plus",
+            owner="qwen",
+            name="qwen-image-edit-plus",
+        ),
+        replicate_qwen_edit_output_dir="artifacts/test-qwen-edit",
+        replicate_qwen_edit_download_output=True,
+        replicate_qwen_edit_force_disable_safety_checker=True,
         replicate_local_image_input_roots=("/tmp/test-images",),
         replicate_default_verbosity=None,
         replicate_default_max_completion_tokens=None,
@@ -192,6 +201,8 @@ def test_tools_lists_generate_image_tool() -> None:
     assert body["data"][0]["id"] == "generate_image"
     assert body["data"][0]["object"] == "tool"
     assert "prompt" in body["data"][0]["input_schema"]["properties"]
+    assert body["data"][1]["id"] == "edit_image_uncensored"
+    assert "image_input" in body["data"][1]["input_schema"]["properties"]
 
 
 def test_generate_image_tool_uses_replicate_image_client() -> None:
@@ -259,6 +270,96 @@ def test_generate_image_tool_rejects_local_paths_outside_allowed_roots() -> None
 
     assert response.status_code == 422
     assert "Allowed roots" in response.json()["detail"]
+
+
+def test_edit_image_tool_uses_qwen_client() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_qwen_edit_client.edit_image = AsyncMock(
+            return_value=QwenImageEditResponse(
+                tool_name="edit_image_uncensored",
+                model="qwen-image-edit-plus",
+                prompt="edit this image",
+                output_urls=["https://example.com/result.webp"],
+                local_paths=["/tmp/result.webp"],
+                output_format="webp",
+                prediction_id="pred-2",
+            )
+        )
+        response = client.post(
+            "/v1/tools/edit_image_uncensored",
+            json={
+                "prompt": "edit this image",
+                "image_input": ["tests/fixtures/vision-comic.jpeg"],
+                "output_format": "webp",
+            },
+        )
+
+    assert response.status_code == 200
+    called_model = (
+        client.app.state.services.replicate_qwen_edit_client.edit_image.await_args.args[
+            0
+        ]
+    )
+    called_payload = (
+        client.app.state.services.replicate_qwen_edit_client.edit_image.await_args.args[
+            1
+        ]
+    )
+    assert called_model.public_id == "qwen-image-edit-plus"
+    assert called_payload.image_input == ["tests/fixtures/vision-comic.jpeg"]
+
+
+def test_edit_image_tool_requires_image_input() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/tools/edit_image_uncensored",
+            json={
+                "prompt": "edit this image",
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_edit_image_tool_accepts_output_quality_zero() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_qwen_edit_client.edit_image = AsyncMock(
+            return_value=QwenImageEditResponse(
+                tool_name="edit_image_uncensored",
+                model="qwen-image-edit-plus",
+                prompt="edit this image",
+                output_urls=["https://example.com/result.png"],
+                local_paths=["/tmp/result.png"],
+                output_format="png",
+                prediction_id="pred-3",
+            )
+        )
+        response = client.post(
+            "/v1/tools/edit_image_uncensored",
+            json={
+                "prompt": "edit this image",
+                "image_input": ["tests/fixtures/vision-comic.jpeg"],
+                "output_format": "png",
+                "output_quality": 0,
+            },
+        )
+
+    assert response.status_code == 200
+
+
+def test_edit_image_tool_rejects_invalid_enum_values() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/tools/edit_image_uncensored",
+            json={
+                "prompt": "edit this image",
+                "image_input": ["tests/fixtures/vision-comic.jpeg"],
+                "aspect_ratio": "2:1",
+                "output_format": "tiff",
+            },
+        )
+
+    assert response.status_code == 422
 
 
 def test_chat_completions_returns_400_for_unknown_model() -> None:

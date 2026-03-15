@@ -4,10 +4,9 @@ from pathlib import Path
 
 import httpx
 
-from app.clients.replicate_files import ReplicateFilesClient
-from app.clients.replicate_images import ReplicateImageClient
+from app.clients.replicate_qwen_edit import ReplicateQwenEditClient
 from app.config import EchoModel, ReplicateModel, Settings
-from app.tool_schemas import ImageGenerationRequest
+from app.tool_schemas import QwenImageEditRequest
 
 
 class FakeFilesClient:
@@ -23,7 +22,7 @@ class FakeFilesClient:
 
 
 def make_settings(tmp_dir: Path | None = None) -> Settings:
-    output_dir = tmp_dir or Path("artifacts/test-images")
+    output_dir = tmp_dir or Path("artifacts/test-qwen-edit")
     return Settings(
         app_name="Test App",
         app_host="127.0.0.1",
@@ -41,7 +40,7 @@ def make_settings(tmp_dir: Path | None = None) -> Settings:
             owner="google",
             name="nano-banana-2",
         ),
-        replicate_image_output_dir=str(output_dir),
+        replicate_image_output_dir=str(output_dir / "nano"),
         replicate_image_download_output=True,
         replicate_qwen_edit_tool_id="edit_image_uncensored",
         replicate_qwen_edit_model=ReplicateModel(
@@ -49,7 +48,7 @@ def make_settings(tmp_dir: Path | None = None) -> Settings:
             owner="qwen",
             name="qwen-image-edit-plus",
         ),
-        replicate_qwen_edit_output_dir=str(output_dir / "qwen"),
+        replicate_qwen_edit_output_dir=str(output_dir),
         replicate_qwen_edit_download_output=True,
         replicate_qwen_edit_force_disable_safety_checker=True,
         replicate_local_image_input_roots=(str(output_dir),),
@@ -62,7 +61,7 @@ def make_settings(tmp_dir: Path | None = None) -> Settings:
     )
 
 
-def test_replicate_image_client_posts_expected_payload(tmp_path: Path) -> None:
+def test_qwen_edit_client_posts_expected_payload(tmp_path: Path) -> None:
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -70,15 +69,15 @@ def test_replicate_image_client_posts_expected_payload(tmp_path: Path) -> None:
         if request.url.host == "delivery.replicate.com":
             return httpx.Response(
                 200,
-                content=b"png-bytes",
-                headers={"Content-Type": "image/png"},
+                content=b"webp-bytes",
+                headers={"Content-Type": "image/webp"},
             )
         return httpx.Response(
             200,
             json={
                 "id": "pred-1",
                 "status": "succeeded",
-                "output": ["https://delivery.replicate.com/image.png"],
+                "output": ["https://delivery.replicate.com/image.webp"],
             },
         )
 
@@ -92,41 +91,46 @@ def test_replicate_image_client_posts_expected_payload(tmp_path: Path) -> None:
             ) as http_client,
             httpx.AsyncClient(transport=transport) as download_client,
         ):
-            client = ReplicateImageClient(
+            client = ReplicateQwenEditClient(
                 make_settings(tmp_path),
                 http_client=http_client,
                 files_client=files_client,
                 download_client=download_client,
             )
-            result = await client.generate_image(
-                make_settings(tmp_path).replicate_image_model,
-                ImageGenerationRequest(
-                    prompt="draw a fox",
-                    image_input=["/tmp/ref.png"],
-                    aspect_ratio="3:4",
-                    resolution="1K",
-                    output_format="png",
+            result = await client.edit_image(
+                make_settings(tmp_path).replicate_qwen_edit_model,
+                QwenImageEditRequest(
+                    prompt="turn this into a watercolor cover",
+                    image_input=["tests/fixtures/vision-comic.jpeg"],
+                    aspect_ratio="match_input_image",
+                    go_fast=True,
+                    seed=7,
+                    output_format="webp",
+                    output_quality=90,
                 ),
-                tool_name="generate_image",
+                tool_name="edit_image_uncensored",
             )
 
         body = json.loads(calls[0].content)
         assert body["input"] == {
-            "prompt": "draw a fox",
-            "image_input": ["https://api.replicate.com/v1/files/1"],
-            "aspect_ratio": "3:4",
-            "resolution": "1K",
-            "output_format": "png",
+            "prompt": "turn this into a watercolor cover",
+            "image": ["https://api.replicate.com/v1/files/1"],
+            "aspect_ratio": "match_input_image",
+            "go_fast": True,
+            "seed": 7,
+            "output_format": "webp",
+            "output_quality": 90,
+            "disable_safety_checker": True,
         }
-        assert files_client.calls == ["/tmp/ref.png"]
-        assert result.output_url == "https://delivery.replicate.com/image.png"
-        assert result.local_path is not None
-        assert Path(result.local_path).is_file()
+        assert files_client.calls == ["tests/fixtures/vision-comic.jpeg"]
+        assert result.output_urls == ["https://delivery.replicate.com/image.webp"]
+        assert len(result.local_paths) == 1
+        assert Path(result.local_paths[0]).is_file()
 
     asyncio.run(run())
 
 
-def test_replicate_image_client_polls_until_output_ready(tmp_path: Path) -> None:
+def test_qwen_edit_client_polls_until_output_ready(tmp_path: Path) -> None:
     responses = iter(
         [
             httpx.Response(
@@ -143,13 +147,21 @@ def test_replicate_image_client_polls_until_output_ready(tmp_path: Path) -> None
                 json={
                     "id": "pred-1",
                     "status": "succeeded",
-                    "output": ["https://delivery.replicate.com/image.jpg"],
+                    "output": [
+                        "https://delivery.replicate.com/image-1.png",
+                        "https://delivery.replicate.com/image-2.png",
+                    ],
                 },
             ),
             httpx.Response(
                 200,
-                content=b"jpg-bytes",
-                headers={"Content-Type": "image/jpeg"},
+                content=b"png-1",
+                headers={"Content-Type": "image/png"},
+            ),
+            httpx.Response(
+                200,
+                content=b"png-2",
+                headers={"Content-Type": "image/png"},
             ),
         ]
     )
@@ -166,68 +178,22 @@ def test_replicate_image_client_polls_until_output_ready(tmp_path: Path) -> None
             ) as http_client,
             httpx.AsyncClient(transport=transport) as download_client,
         ):
-            client = ReplicateImageClient(
+            client = ReplicateQwenEditClient(
                 make_settings(tmp_path),
                 http_client=http_client,
                 files_client=FakeFilesClient(),
                 download_client=download_client,
             )
-            result = await client.generate_image(
-                make_settings(tmp_path).replicate_image_model,
-                ImageGenerationRequest(prompt="draw a fox"),
-                tool_name="generate_image",
+            result = await client.edit_image(
+                make_settings(tmp_path).replicate_qwen_edit_model,
+                QwenImageEditRequest(
+                    prompt="turn this into a watercolor cover",
+                    image_input=["tests/fixtures/vision-comic.jpeg"],
+                ),
+                tool_name="edit_image_uncensored",
             )
 
-        assert result.output_url.endswith(".jpg")
-        assert result.local_path is not None
-
-    asyncio.run(run())
-
-
-def test_replicate_files_client_uploads_local_paths(tmp_path: Path) -> None:
-    source = tmp_path / "cat.png"
-    source.write_bytes(b"png-bytes")
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/files"
-        return httpx.Response(
-            200,
-            json={"urls": {"get": "https://api.replicate.com/v1/files/1"}},
-        )
-
-    async def run() -> None:
-        transport = httpx.MockTransport(handler)
-        settings = make_settings(tmp_path)
-        async with httpx.AsyncClient(
-            base_url=settings.replicate_base_url,
-            transport=transport,
-        ) as http_client:
-            client = ReplicateFilesClient(
-                settings,
-                http_client=http_client,
-            )
-            file_url = await client.prepare_image_url(str(source))
-
-        assert file_url == "https://api.replicate.com/v1/files/1"
-
-    asyncio.run(run())
-
-
-def test_replicate_files_client_rejects_disallowed_local_paths(tmp_path: Path) -> None:
-    allowed_root = tmp_path / "allowed"
-    allowed_root.mkdir()
-    source = tmp_path / "cat.png"
-    source.write_bytes(b"png-bytes")
-
-    async def run() -> None:
-        client = ReplicateFilesClient(make_settings(allowed_root))
-        try:
-            await client.prepare_image_url(str(source))
-        except Exception as exc:
-            assert "Allowed roots" in str(exc)
-        else:
-            raise AssertionError("Expected local path validation to fail")
-        finally:
-            await client.aclose()
+        assert len(result.output_urls) == 2
+        assert len(result.local_paths) == 2
 
     asyncio.run(run())
