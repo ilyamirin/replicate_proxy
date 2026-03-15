@@ -1,6 +1,6 @@
 # replicate-proxy
 
-Minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, including SSE streaming.
+Minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, including SSE streaming, plus a Replicate-backed image tool.
 
 ## Config
 
@@ -17,6 +17,7 @@ Settings are loaded once when the service starts.
 Token counting uses local `tiktoken` data from `.tiktoken-cache/o200k_base.tiktoken`.
 The repository must contain `.tiktoken-cache/o200k_base.tiktoken`; startup copies it to the cache key path expected by `tiktoken`.
 Default Replicate models in the config are `gpt-5.4` and `gpt-5-nano`.
+Image generation/editing tool defaults to `google/nano-banana-2`.
 
 ## Run
 
@@ -48,8 +49,10 @@ Always run these before commit:
 ## Replicate notes
 
 - `GET /v1/models` returns the configured public model list
+- `GET /v1/tools` returns the internal tool list and JSON schema for each tool
 - `POST /v1/chat/completions` resolves request `model` through `REPLICATE_MODEL_MAP`
 - `POST /v1/chat/completions` routes the local echo model without calling Replicate
+- `POST /v1/tools/generate_image` calls `google/nano-banana-2` on Replicate
 - `stream=true` returns real `text/event-stream` chunks
 - Token usage is calculated with local `tiktoken` using `o200k_base`
 - `REPLICATE_MODEL_MAP` format: `public-id=owner/model-name`
@@ -61,7 +64,32 @@ Always run these before commit:
 - Optional server-side fallback envs exist only for `verbosity` and `max_completion_tokens`
 - The request may use either `messages` or Replicate-native `prompt`, `system_prompt`, and `image_input`
 - `messages[].content` may be a plain string or an OpenAI-style content-part array with `text` and `image_url`
+- The image tool accepts `prompt`, optional `image_input` with up to 14 images, `aspect_ratio`, `resolution`, `google_search`, `image_search`, and `output_format`
+- Image tool inputs may be remote URLs, `data:` URLs, existing Replicate file URLs, or local file paths
+- Local file paths are restricted to `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`; by default only `tests/fixtures` and `artifacts/uploads` are allowed
+- By default the image tool downloads the generated image into `REPLICATE_IMAGE_OUTPUT_DIR` and returns both `output_url` and `local_path`
 - Sync mode uses `Prefer: wait=<seconds>`
 - If Replicate returns an incomplete non-stream prediction, the app polls the `urls.get` URL until completion or timeout
 - Stream errors before the upstream stream starts return normal HTTP `502`
 - Stream errors after the stream has started are emitted inside SSE and then end with `[DONE]`
+
+## Image tool example
+
+List tools:
+
+```bash
+curl -sS http://127.0.0.1:8000/v1/tools
+```
+
+Generate an image:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/tools/generate_image \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "storybook watercolor fox and nightingale at dusk",
+    "aspect_ratio": "3:4",
+    "resolution": "1K",
+    "output_format": "png"
+  }'
+```

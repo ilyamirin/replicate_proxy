@@ -3,7 +3,7 @@
 ## Project summary
 
 - Project: `replicate-proxy`
-- Purpose: minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`
+- Purpose: minimal FastAPI server with OpenAI-compatible `GET /v1/models`, `POST /v1/chat/completions`, and a Replicate-backed image tool
 - Current backends: Replicate-backed models plus a local echo model
 - Python version: `3.12`
 - Package/dependency management: `pyproject.toml` + local `.venv`
@@ -22,9 +22,11 @@
 - `app/main.py`: FastAPI app and HTTP endpoints
 - `app/backends.py`: startup-time service container
 - `app/clients/replicate.py`: Replicate HTTP client with sync, polling, and SSE stream support
+- `app/clients/replicate_images.py`: Replicate client for image generation/editing tools
 - `app/config.py`: settings loader from env and `.env`, loaded once at service start
 - `app/services.py`: echo business logic
 - `app/schemas.py`: request/response models
+- `app/tool_schemas.py`: internal tool request/response models
 - `app/tokens.py`: token counting via local `tiktoken` cache using `o200k_base`
 - `app/run.py`: entrypoint that starts uvicorn using env-based host/port
 - `tests/test_api.py`: API and config tests
@@ -45,6 +47,11 @@
 - `REPLICATE_BASE_URL`: default `https://api.replicate.com/v1`
 - `REPLICATE_MODEL_MAP`: comma-separated `public-id=owner/model-name` entries used by `/v1/models` and chat routing
   Current defaults include `gpt-5.4` and `gpt-5-nano`
+- `REPLICATE_IMAGE_TOOL_ID`: public id for the internal image tool, default `generate_image`
+- `REPLICATE_IMAGE_TOOL_MODEL`: target Replicate image model, default `google/nano-banana-2`
+- `REPLICATE_IMAGE_OUTPUT_DIR`: local output directory for downloaded generated images
+- `REPLICATE_IMAGE_DOWNLOAD_OUTPUT`: if `true`, download generated outputs locally and return `local_path`
+- `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`: comma-separated allowlist for local `image_input` paths, default `tests/fixtures,artifacts/uploads`
 - `REPLICATE_DEFAULT_VERBOSITY`: optional fallback for requests that omit `verbosity`
 - `REPLICATE_DEFAULT_MAX_COMPLETION_TOKENS`: optional fallback for requests that omit `max_completion_tokens`
 - `REPLICATE_SYNC_WAIT_SECONDS`: sync wait header for Replicate
@@ -55,7 +62,9 @@
 ## Important behavior
 
 - `GET {APP_API_PREFIX}/models` returns the configured public model list
+- `GET {APP_API_PREFIX}/tools` returns the internal tool list and JSON schema
 - `POST {APP_API_PREFIX}/chat/completions` returns OpenAI-style JSON
+- `POST {APP_API_PREFIX}/tools/{REPLICATE_IMAGE_TOOL_ID}` runs `google/nano-banana-2`
 - If the request `model` equals `ECHO_MODEL_ID`, reply content is the last `user` message from the request
 - All other known models are resolved via `REPLICATE_MODEL_MAP` and sent to Replicate
 - `stream=true` returns OpenAI-style SSE chunks
@@ -69,6 +78,10 @@
 - Request schema accepts `role` in `system|user|assistant|tool`
 - `messages[].content` supports either a plain string or an OpenAI-style part array with `text` and `image_url`
 - Unknown extra request fields are ignored by pydantic models
+- The image tool accepts `prompt`, optional `image_input`, `aspect_ratio`, `resolution`, `google_search`, `image_search`, and `output_format`
+- Image tool inputs may be remote URLs, `data:` URLs, Replicate file URLs, or local file paths
+- Local file paths are allowed only under `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`
+- Generated image outputs on Replicate are short-lived; default behavior is to download them locally into `REPLICATE_IMAGE_OUTPUT_DIR`
 
 ## Local setup
 
@@ -131,6 +144,7 @@ What they cover:
 - If `APP_API_PREFIX` or `APP_HEALTH_PATH` changes, restart the process to apply the new routes
 - Existing tests call default paths `/health` and `/v1/chat/completions`
 - This is intentionally minimal: no auth on our API and no persistence
+- `artifacts/` is gitignored and used for downloaded image tool outputs
 - Streaming preflight failures should return HTTP `502`; mid-stream failures can only surface inside SSE
 
 ## Good next steps if the project grows

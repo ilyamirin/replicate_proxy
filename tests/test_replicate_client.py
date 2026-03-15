@@ -3,6 +3,7 @@ import json
 
 import httpx
 
+from app.clients.errors import InputValidationError
 from app.clients.replicate import ReplicateClient, ReplicateError
 from app.config import EchoModel, ReplicateModel, Settings
 from app.schemas import ChatCompletionRequest, ChatMessage
@@ -38,6 +39,15 @@ def make_settings() -> Settings:
                 name="gpt-5.4",
             )
         },
+        replicate_image_tool_id="generate_image",
+        replicate_image_model=ReplicateModel(
+            public_id="nano-banana-2",
+            owner="google",
+            name="nano-banana-2",
+        ),
+        replicate_image_output_dir="artifacts/test-images",
+        replicate_image_download_output=True,
+        replicate_local_image_input_roots=("/tmp/test-images",),
         replicate_default_verbosity=None,
         replicate_default_max_completion_tokens=None,
         replicate_sync_wait_seconds=60,
@@ -318,6 +328,29 @@ def test_replicate_client_uses_native_prompt_fields_when_messages_are_omitted() 
         assert body["input"]["prompt"] == "Describe this image"
         assert body["input"]["system_prompt"] == "Reply briefly."
         assert body["input"]["image_input"] == ["https://api.replicate.com/v1/files/1"]
+
+    asyncio.run(run())
+
+
+def test_replicate_client_rejects_disallowed_local_image_paths() -> None:
+    async def run() -> None:
+        client = ReplicateClient(make_settings())
+        try:
+            await client.create_reply(
+                make_settings().replicate_model_map["gpt-5.4"],
+                ChatCompletionRequest(
+                    model="gpt-5.4",
+                    reasoning_effort="low",
+                    prompt="Describe this image",
+                    image_input=["/etc/passwd"],
+                ),
+            )
+        except InputValidationError as exc:
+            assert "Allowed roots" in str(exc)
+        else:
+            raise AssertionError("InputValidationError was not raised")
+        finally:
+            await client.aclose()
 
     asyncio.run(run())
 

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.clients.replicate import ReplicateError
 from app.config import EchoModel, ReplicateModel, Settings, load_settings
 from app.main import create_app
+from app.tool_schemas import ImageGenerationResponse
 
 
 def make_settings() -> Settings:
@@ -31,6 +32,15 @@ def make_settings() -> Settings:
                 name="gpt-5-nano",
             ),
         },
+        replicate_image_tool_id="generate_image",
+        replicate_image_model=ReplicateModel(
+            public_id="nano-banana-2",
+            owner="google",
+            name="nano-banana-2",
+        ),
+        replicate_image_output_dir="artifacts/test-images",
+        replicate_image_download_output=True,
+        replicate_local_image_input_roots=("/tmp/test-images",),
         replicate_default_verbosity=None,
         replicate_default_max_completion_tokens=None,
         replicate_sync_wait_seconds=60,
@@ -170,6 +180,85 @@ def test_models_lists_available_models() -> None:
             },
         ],
     }
+
+
+def test_tools_lists_generate_image_tool() -> None:
+    with make_client() as client:
+        response = client.get("/v1/tools")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert body["data"][0]["id"] == "generate_image"
+    assert body["data"][0]["object"] == "tool"
+    assert "prompt" in body["data"][0]["input_schema"]["properties"]
+
+
+def test_generate_image_tool_uses_replicate_image_client() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_image_client.generate_image = AsyncMock(
+            return_value=ImageGenerationResponse(
+                tool_name="generate_image",
+                model="nano-banana-2",
+                prompt="draw a fox",
+                output_url="https://example.com/result.png",
+                local_path="/tmp/result.png",
+                output_format="png",
+                prediction_id="pred-1",
+            )
+        )
+        response = client.post(
+            "/v1/tools/generate_image",
+            json={
+                "prompt": "draw a fox",
+                "aspect_ratio": "3:4",
+                "resolution": "1K",
+                "output_format": "png",
+            },
+        )
+
+    assert response.status_code == 200
+    called_model = (
+        client.app.state.services.replicate_image_client.generate_image.await_args.args[
+            0
+        ]
+    )
+    called_payload = (
+        client.app.state.services.replicate_image_client.generate_image.await_args.args[
+            1
+        ]
+    )
+    assert called_model.public_id == "nano-banana-2"
+    assert called_payload.prompt == "draw a fox"
+    assert called_payload.aspect_ratio == "3:4"
+
+
+def test_generate_image_tool_rejects_conflicting_search_flags() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/tools/generate_image",
+            json={
+                "prompt": "draw a fox",
+                "google_search": True,
+                "image_search": True,
+            },
+        )
+
+    assert response.status_code == 422
+
+
+def test_generate_image_tool_rejects_local_paths_outside_allowed_roots() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/tools/generate_image",
+            json={
+                "prompt": "draw a fox",
+                "image_input": ["/etc/passwd"],
+            },
+        )
+
+    assert response.status_code == 422
+    assert "Allowed roots" in response.json()["detail"]
 
 
 def test_chat_completions_returns_400_for_unknown_model() -> None:
@@ -404,11 +493,31 @@ def test_chat_completions_requires_some_input() -> None:
     assert response.status_code == 422
 
 
+def test_chat_completions_reject_local_image_paths_outside_allowed_roots() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "reasoning_effort": "low",
+                "prompt": "Describe this image.",
+                "image_input": ["/etc/passwd"],
+            },
+        )
+
+    assert response.status_code == 422
+    assert "Allowed roots" in response.json()["detail"]
+
+
 def test_load_settings_reads_env() -> None:
     settings = load_settings()
 
     assert settings.echo_model.public_id
     assert settings.replicate_model_map
+    assert (
+        settings.replicate_image_model.public_id == settings.replicate_image_model.name
+    )
+    assert settings.replicate_local_image_input_roots
 
 
 def test_app_uses_startup_settings_snapshot() -> None:

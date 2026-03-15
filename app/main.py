@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.backends import AppServices, build_services
+from app.clients.errors import InputValidationError
 from app.clients.replicate import ReplicateError
 from app.config import (
     EchoModel,
@@ -27,6 +28,11 @@ from app.schemas import (
     ModelListResponse,
     ResponseMessage,
     build_messages_from_request,
+)
+from app.tool_schemas import (
+    ImageGenerationRequest,
+    ToolCard,
+    ToolListResponse,
 )
 
 
@@ -56,6 +62,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ]
         )
 
+    @app.get(f"{settings.api_prefix}/tools", response_model=ToolListResponse)
+    async def list_tools() -> ToolListResponse:
+        return ToolListResponse(
+            data=[
+                ToolCard(
+                    id=settings.replicate_image_tool_id,
+                    description=(
+                        "Generate or edit images with google/nano-banana-2 via "
+                        "Replicate."
+                    ),
+                    input_schema=ImageGenerationRequest.model_json_schema(),
+                )
+            ]
+        )
+
+    @app.post(f"{settings.api_prefix}/tools/{settings.replicate_image_tool_id}")
+    async def generate_image_tool(
+        request: Request,
+        payload: ImageGenerationRequest,
+    ):
+        services = request.app.state.services
+        try:
+            result = await services.replicate_image_client.generate_image(
+                services.settings.replicate_image_model,
+                payload,
+                tool_name=services.settings.replicate_image_tool_id,
+            )
+        except InputValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ReplicateError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return result.model_dump()
+
     @app.post(f"{settings.api_prefix}/chat/completions")
     async def create_chat_completion(
         request: Request,
@@ -72,6 +111,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if payload.stream:
             try:
                 prepared_stream = await prepare_model_stream(services, model, payload)
+            except InputValidationError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
             except ReplicateError as exc:
                 raise HTTPException(status_code=502, detail=str(exc)) from exc
             return StreamingResponse(
@@ -81,6 +122,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             reply = await create_model_reply(services, model, payload)
+        except InputValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except ReplicateError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 

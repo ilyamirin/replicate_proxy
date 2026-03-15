@@ -6,6 +6,12 @@
 curl -sS http://127.0.0.1:8000/v1/models
 ```
 
+## List tools
+
+```bash
+curl -sS http://127.0.0.1:8000/v1/tools
+```
+
 ## Echo model
 
 ```bash
@@ -140,5 +146,32 @@ curl -sS -X POST http://127.0.0.1:8000/v1/chat/completions \
     "max_completion_tokens": 300,
     "prompt": "Describe the image in one short sentence.",
     "image_input": ["'"$REPLICATE_FILE_URL"'"]
+  }'
+```
+
+## nano-banana-2 image tool
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/tools/generate_image \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "retro poster of a fox and nightingale at dusk",
+    "aspect_ratio": "3:4",
+    "resolution": "1K",
+    "output_format": "png"
+  }'
+```
+
+## nano-banana-2 image edit with local fixture uploaded through the service
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/tools/generate_image \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "prompt": "Turn this into a watercolor book cover.",
+    "image_input": ["tests/fixtures/vision-comic.jpeg"],
+    "aspect_ratio": "match_input_image",
+    "resolution": "1K",
+    "output_format": "png"
   }'
 ```

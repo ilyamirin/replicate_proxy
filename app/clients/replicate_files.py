@@ -3,11 +3,12 @@ from __future__ import annotations
 import base64
 import binascii
 import mimetypes
+from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
-from app.clients.errors import ReplicateError
+from app.clients.errors import InputValidationError, ReplicateError
 from app.config import Settings
 
 REPLICATE_FILE_PREFIX = "https://api.replicate.com/v1/files/"
@@ -50,8 +51,10 @@ class ReplicateFilesClient:
         if source.startswith("data:"):
             filename, content, content_type = self._decode_data_url(source)
             uploaded_url = await self._upload_file(filename, content, content_type)
-        else:
+        elif self._is_remote_url(source):
             uploaded_url = await self._upload_remote_url(source)
+        else:
+            uploaded_url = await self._upload_local_path(source)
 
         self._cache[source] = uploaded_url
         return uploaded_url
@@ -94,6 +97,18 @@ class ReplicateFilesClient:
             raise ReplicateError("Replicate file upload did not return a file URL.")
         return str(file_url)
 
+    async def _upload_local_path(self, source: str) -> str:
+        path = Path(source).expanduser().resolve()
+        self._validate_local_path(path)
+        if not path.is_file():
+            raise InputValidationError(f"Image file not found: {source}")
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        if not content_type.startswith("image/"):
+            raise InputValidationError(
+                f"Only image files are allowed for local image_input: {source}"
+            )
+        return await self._upload_file(path.name, path.read_bytes(), content_type)
+
     @staticmethod
     def _decode_data_url(source: str) -> tuple[str, bytes, str]:
         header, encoded = source.split(",", 1)
@@ -120,3 +135,19 @@ class ReplicateFilesClient:
             return filename
         extension = mimetypes.guess_extension(content_type) or ".bin"
         return f"download{extension}"
+
+    @staticmethod
+    def _is_remote_url(source: str) -> bool:
+        parsed = urlparse(source)
+        return parsed.scheme in {"http", "https"}
+
+    def _validate_local_path(self, path: Path) -> None:
+        if any(
+            path.is_relative_to(Path(root))
+            for root in self.settings.replicate_local_image_input_roots
+        ):
+            return
+        allowed = ", ".join(self.settings.replicate_local_image_input_roots)
+        raise InputValidationError(
+            f"Local image_input path is not allowed. Allowed roots: {allowed}"
+        )
