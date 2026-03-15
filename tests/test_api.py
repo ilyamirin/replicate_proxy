@@ -448,6 +448,38 @@ def test_assistant_model_reads_openwebui_headers() -> None:
     )
 
 
+def test_replicate_model_marks_openwebui_meta_request() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_client.create_reply = AsyncMock(
+            return_value='{"title":"meta"}'
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "reasoning_effort": "low",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "### Task:\nGenerate a concise, 3-5 word title with an "
+                            "emoji summarizing the chat history.\n### Output:\n"
+                            'JSON format: { "title": "your concise title here" }\n'
+                            "### Chat History:\n<chat_history>\nUSER: hello\n"
+                            "</chat_history>"
+                        ),
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    called_payload = (
+        client.app.state.services.replicate_client.create_reply.await_args.args[1]
+    )
+    assert called_payload.metadata["openwebui_meta_request"] is True
+
+
 def test_assistant_model_requires_conversation_id_or_user() -> None:
     with make_client() as client:
         response = client.post(

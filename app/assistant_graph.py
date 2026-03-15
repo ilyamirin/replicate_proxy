@@ -17,6 +17,11 @@ from app.clients.replicate import ReplicateClient
 from app.clients.replicate_images import ReplicateImageClient
 from app.clients.replicate_qwen_edit import ReplicateQwenEditClient
 from app.config import ReplicateModel, Settings
+from app.openwebui_meta import (
+    OPENWEBUI_META_REQUEST_KEY,
+    is_openwebui_meta_request,
+    latest_user_text,
+)
 from app.schemas import ChatCompletionRequest, ChatMessage, build_messages_from_request
 from app.tool_schemas import (
     ImageGenerationRequest,
@@ -97,8 +102,17 @@ class AssistantGraphService:
         *,
         request_base_url: str,
     ) -> str:
+        if payload.metadata.get(
+            OPENWEBUI_META_REQUEST_KEY
+        ) or is_openwebui_meta_request(payload):
+            logger.info(
+                "assistant meta request detected prompt=%r",
+                self._log_preview(latest_user_text(payload)),
+            )
+            return await self._run_openwebui_meta_request(payload)
+
         conversation_id = self.require_conversation_id(payload)
-        prompt_preview = self._log_preview(self._latest_user_text(payload))
+        prompt_preview = self._log_preview(latest_user_text(payload))
         logger.info(
             "assistant request start conversation_id=%s user=%s prompt=%r",
             conversation_id,
@@ -176,7 +190,7 @@ class AssistantGraphService:
         if forced_route is not None:
             return {"route": forced_route}
 
-        current_text = self._latest_user_text(payload)
+        current_text = latest_user_text(payload)
         has_images = bool(self._extract_image_inputs(payload))
         recent_turns = "\n".join(
             f"{message.role}: {self._message_text(message)}"
@@ -185,14 +199,14 @@ class AssistantGraphService:
         router_prompt = (
             "You are a routing agent for a multimodal assistant. "
             "Return JSON only. Decide one action from: text, image, image_uncensored. "
-            "Use text for normal answers. "
+            "Use text for normal answers. All text generation is handled by "
+            "text_model='gpt-5.4'. "
             "Use image for normal image generation/editing. "
             "Use image_uncensored only for uncensored image edits when the user "
             "clearly "
             "asks for uncensored/adult sexual image editing of an existing image. "
             "If the user asks to analyze or describe an image, choose text with "
             "text_model='gpt-5.4'. "
-            "For simple text questions choose text_model='gpt-5-nano'. "
             "For text actions include reasoning_effort, verbosity, and "
             "max_completion_tokens. For image actions include tool_prompt and any "
             "useful settings. "
@@ -211,9 +225,8 @@ class AssistantGraphService:
         )
         router_request = ChatCompletionRequest(
             model=self.settings.assistant_router_model_id,
-            reasoning_effort="minimal",
+            reasoning_effort="medium",
             verbosity="low",
-            max_completion_tokens=250,
             messages=[
                 ChatMessage(role="system", content=router_prompt),
                 ChatMessage(
@@ -242,7 +255,7 @@ class AssistantGraphService:
     async def _run_text(self, state: AssistantState) -> dict[str, Any]:
         payload = ChatCompletionRequest(**state["current_request"])
         route = state["route"]
-        model_id = route.get("text_model") or self.settings.assistant_router_model_id
+        model_id = self.settings.assistant_full_model_id
         history = state.get("history", [])
         text_payload = ChatCompletionRequest(
             **{
@@ -252,7 +265,10 @@ class AssistantGraphService:
                 "reasoning_effort": route.get("reasoning_effort")
                 or self._default_reasoning(model_id),
                 "verbosity": route.get("verbosity") or "medium",
-                "max_completion_tokens": route.get("max_completion_tokens") or 400,
+                "max_completion_tokens": (
+                    route.get("max_completion_tokens")
+                    or self._default_max_completion_tokens(model_id)
+                ),
             }
         )
         reply = await self._replicate_client.create_reply(
@@ -264,13 +280,26 @@ class AssistantGraphService:
             "response_text": reply,
         }
 
+    async def _run_openwebui_meta_request(self, payload: ChatCompletionRequest) -> str:
+        meta_payload = ChatCompletionRequest(
+            model=self.settings.assistant_router_model_id,
+            messages=build_messages_from_request(payload),
+            reasoning_effort="low",
+            verbosity="low",
+            max_completion_tokens=1024,
+        )
+        return await self._replicate_client.create_reply(
+            self._require_model(self.settings.assistant_router_model_id),
+            meta_payload,
+        )
+
     async def _run_image(self, state: AssistantState) -> dict[str, Any]:
         payload = ChatCompletionRequest(**state["current_request"])
         route = state["route"]
         result = await self._replicate_image_client.generate_image(
             self.settings.replicate_image_model,
             ImageGenerationRequest(
-                prompt=route.get("tool_prompt") or self._latest_user_text(payload),
+                prompt=route.get("tool_prompt") or latest_user_text(payload),
                 image_input=self._extract_image_inputs(payload),
                 aspect_ratio=route.get("aspect_ratio"),
                 resolution=route.get("resolution"),
@@ -299,7 +328,7 @@ class AssistantGraphService:
         result = await self._replicate_qwen_edit_client.edit_image(
             self.settings.replicate_qwen_edit_model,
             QwenImageEditRequest(
-                prompt=route.get("tool_prompt") or self._latest_user_text(payload),
+                prompt=route.get("tool_prompt") or latest_user_text(payload),
                 image_input=image_input,
                 aspect_ratio=route.get("aspect_ratio"),
                 go_fast=route.get("go_fast", True),
@@ -330,17 +359,6 @@ class AssistantGraphService:
             "assistant model requires metadata.conversation_id or user "
             "for persisted state."
         )
-
-    def _latest_user_text(self, payload: ChatCompletionRequest) -> str:
-        messages = build_messages_from_request(payload)
-        user_contents = [
-            self._message_text(message)
-            for message in messages
-            if message.role == "user" and self._message_text(message)
-        ]
-        if user_contents:
-            return user_contents[-1]
-        return payload.prompt or ""
 
     def _extract_image_inputs(self, payload: ChatCompletionRequest) -> list[str]:
         if payload.image_input:
@@ -434,14 +452,14 @@ class AssistantGraphService:
             return forced_route
         return {
             "action": "text",
-            "text_model": self.settings.assistant_router_model_id,
-            "reasoning_effort": "low",
+            "text_model": self.settings.assistant_full_model_id,
+            "reasoning_effort": "medium",
             "verbosity": "medium",
-            "max_completion_tokens": 400,
+            "max_completion_tokens": 65536,
         }
 
     def _forced_route(self, payload: ChatCompletionRequest) -> dict[str, Any] | None:
-        text = self._latest_user_text(payload).lower()
+        text = latest_user_text(payload).lower()
         has_images = bool(self._extract_image_inputs(payload))
         if has_images and any(
             token in text
@@ -459,7 +477,7 @@ class AssistantGraphService:
                 "text_model": self.settings.assistant_full_model_id,
                 "reasoning_effort": "medium",
                 "verbosity": "medium",
-                "max_completion_tokens": 400,
+                "max_completion_tokens": 65536,
             }
         if any(
             token in text
@@ -473,7 +491,7 @@ class AssistantGraphService:
         ):
             return {
                 "action": "image",
-                "tool_prompt": self._latest_user_text(payload),
+                "tool_prompt": latest_user_text(payload),
                 "aspect_ratio": "3:4",
                 "resolution": "1K",
                 "output_format": "png",
@@ -491,7 +509,7 @@ class AssistantGraphService:
         ):
             return {
                 "action": "image_uncensored",
-                "tool_prompt": self._latest_user_text(payload),
+                "tool_prompt": latest_user_text(payload),
                 "aspect_ratio": "match_input_image",
                 "go_fast": True,
                 "output_format": "png",
@@ -502,18 +520,9 @@ class AssistantGraphService:
     def _normalize_route(self, route: dict[str, Any]) -> dict[str, Any]:
         action = route["action"]
         if action == "text":
-            model_id = route.get("text_model")
-            if model_id not in {
-                self.settings.assistant_router_model_id,
-                self.settings.assistant_full_model_id,
-            }:
-                model_id = self.settings.assistant_router_model_id
+            model_id = self.settings.assistant_full_model_id
             reasoning = route.get("reasoning_effort")
-            allowed_reasoning = (
-                self.FULL_REASONING
-                if model_id == self.settings.assistant_full_model_id
-                else self.ROUTER_REASONING
-            )
+            allowed_reasoning = self.FULL_REASONING
             if reasoning not in allowed_reasoning:
                 reasoning = self._default_reasoning(model_id)
             verbosity = route.get("verbosity")
@@ -521,7 +530,7 @@ class AssistantGraphService:
                 verbosity = "medium"
             max_tokens = route.get("max_completion_tokens")
             if not isinstance(max_tokens, int) or max_tokens < 1:
-                max_tokens = 400
+                max_tokens = self._default_max_completion_tokens(model_id)
             return {
                 "action": "text",
                 "text_model": model_id,
@@ -574,9 +583,12 @@ class AssistantGraphService:
         return model
 
     def _default_reasoning(self, model_id: str) -> str:
+        return "medium"
+
+    def _default_max_completion_tokens(self, model_id: str) -> int:
         if model_id == self.settings.assistant_full_model_id:
-            return "medium"
-        return "low"
+            return 65536
+        return 400
 
     def _format_image_response(
         self,

@@ -22,6 +22,7 @@ from app.config import (
     snapshot_settings,
 )
 from app.model_options import allowed_reasoning_efforts
+from app.openwebui_meta import mark_openwebui_meta_request
 from app.schemas import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -143,6 +144,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=400, detail=f"Unknown model: {payload.model}"
             )
+        mark_openwebui_meta_request(payload)
         if isinstance(model, AssistantModel):
             enrich_assistant_payload_from_headers(request, payload)
         validate_model_payload(services.settings, model, payload)

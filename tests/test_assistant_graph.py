@@ -12,9 +12,11 @@ class FakeReplicateClient:
     def __init__(self, replies: list[str]) -> None:
         self._replies = iter(replies)
         self.calls = 0
+        self.payloads = []
 
     async def create_reply(self, model, payload):
         self.calls += 1
+        self.payloads.append(payload)
         return next(self._replies)
 
 
@@ -37,14 +39,50 @@ class MemoryAwareFakeReplicateClient:
             )
 
         history = "\n".join(
-            message.content
-            if isinstance(message.content, str)
-            else str(message.content)
+            (
+                message.content
+                if isinstance(message.content, str)
+                else str(message.content)
+            )
             for message in payload.messages
         )
         if "Как меня зовут" in history and "меня зовут Илья" in history:
             return "Тебя зовут Илья, и ты любишь груши."
         return "Понял: тебя зовут Илья и ты любишь груши."
+
+
+class MetaAwareFakeReplicateClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.payloads = []
+
+    async def create_reply(self, model, payload):
+        self.calls += 1
+        self.payloads.append(payload)
+        first_message = payload.messages[0]
+        if (
+            first_message.role == "system"
+            and isinstance(first_message.content, str)
+            and "routing agent" in first_message.content
+        ):
+            return (
+                '{"action":"text","text_model":"gpt-5-nano",'
+                '"reasoning_effort":"medium","verbosity":"medium",'
+                '"max_completion_tokens":400}'
+            )
+
+        last_text = payload.messages[-1].content
+        if isinstance(last_text, str) and last_text.startswith("### Task:"):
+            return '{"title":"🤖 Тестовый чат"}'
+
+        history = "\n".join(
+            message.content
+            if isinstance(message.content, str)
+            else str(message.content)
+            for message in payload.messages
+        )
+        assert "### Task:" not in history
+        return "Обычный ответ без загрязнения memory."
 
 
 class FakeImageClient:
@@ -265,6 +303,102 @@ def test_assistant_graph_uses_persisted_history_for_text_replies(
         assert "Илья" in first_reply
         assert "Илья" in second_reply
         assert "груши" in second_reply
+        await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_assistant_graph_uses_unbounded_planner_and_large_full_model_budget(
+    tmp_path: Path,
+) -> None:
+    replicate_client = FakeReplicateClient(
+        [
+            (
+                '{"action":"text","text_model":"gpt-5-nano",'
+                '"reasoning_effort":"medium","verbosity":"medium",'
+                '"max_completion_tokens":null}'
+            ),
+            "Полный ответ.",
+        ]
+    )
+    service = AssistantGraphService(
+        make_settings(tmp_path),
+        replicate_client=replicate_client,
+        replicate_image_client=FakeImageClient(
+            str(tmp_path / "artifacts" / "images" / "out.png")
+        ),
+        replicate_qwen_edit_client=FakeQwenClient(),
+    )
+
+    async def run() -> None:
+        reply = await service.create_reply(
+            ChatCompletionRequest(
+                model="assistant",
+                metadata={"conversation_id": "planner-budget-test"},
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content="Привет! Кто ты и что умеешь?",
+                    )
+                ],
+            ),
+            request_base_url="http://service.test/",
+        )
+        assert reply == "Полный ответ."
+        assert replicate_client.payloads[0].max_completion_tokens is None
+        assert replicate_client.payloads[1].model == "gpt-5.4"
+        assert replicate_client.payloads[1].max_completion_tokens == 65536
+        await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_assistant_graph_does_not_persist_openwebui_meta_requests(
+    tmp_path: Path,
+) -> None:
+    replicate_client = MetaAwareFakeReplicateClient()
+    service = AssistantGraphService(
+        make_settings(tmp_path),
+        replicate_client=replicate_client,
+        replicate_image_client=FakeImageClient(
+            str(tmp_path / "artifacts" / "images" / "out.png")
+        ),
+        replicate_qwen_edit_client=FakeQwenClient(),
+    )
+
+    async def run() -> None:
+        meta_reply = await service.create_reply(
+            ChatCompletionRequest(
+                model="assistant",
+                metadata={"conversation_id": "owui-meta-test"},
+                messages=[
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "### Task:\nGenerate a concise, 3-5 word title "
+                            "with an emoji "
+                            "summarizing the chat history.\n### Output:\n"
+                            'JSON format: { "title": "your concise title here" }\n'
+                            "### Chat History:\n<chat_history>\nUSER: "
+                            "hello\n</chat_history>"
+                        ),
+                    )
+                ],
+            ),
+            request_base_url="http://service.test/",
+        )
+        assert meta_reply == '{"title":"🤖 Тестовый чат"}'
+
+        normal_reply = await service.create_reply(
+            ChatCompletionRequest(
+                model="assistant",
+                metadata={"conversation_id": "owui-meta-test"},
+                messages=[ChatMessage(role="user", content="Привет! Кто ты?")],
+            ),
+            request_base_url="http://service.test/",
+        )
+        assert normal_reply == "Обычный ответ без загрязнения memory."
+        assert replicate_client.calls == 3
         await service.aclose()
 
     asyncio.run(run())
