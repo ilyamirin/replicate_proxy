@@ -26,6 +26,36 @@ curl -sS -X POST http://127.0.0.1:8000/v1/chat/completions \
   }'
 ```
 
+## Assistant text route
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-OpenWebUI-Chat-Id: demo-thread-1' \
+  -H 'X-OpenWebUI-User-Id: demo-user-1' \
+  -d '{
+    "model": "assistant",
+    "messages": [
+      {"role": "user", "content": "What is 2 + 2? Reply briefly."}
+    ]
+  }'
+```
+
+## Assistant image route
+
+```bash
+curl -sS -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-OpenWebUI-Chat-Id: demo-thread-2' \
+  -H 'X-OpenWebUI-User-Id: demo-user-2' \
+  -d '{
+    "model": "assistant",
+    "messages": [
+      {"role": "user", "content": "Draw a simple watercolor donkey in a meadow."}
+    ]
+  }'
+```
+
 ## GPT-5.4 with model options
 
 ```bash

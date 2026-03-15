@@ -1,6 +1,6 @@
 # replicate-proxy
 
-Minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, including SSE streaming, plus Replicate-backed image tools.
+Minimal FastAPI server with OpenAI-compatible `GET /v1/models` and `POST /v1/chat/completions`, including SSE streaming, a stateful LangGraph assistant model, and Replicate-backed image tools.
 
 ## Config
 
@@ -13,11 +13,13 @@ When a new library is installed for this project, add it there too.
 
 Available public models come from `REPLICATE_MODEL_MAP`.
 Local echo is exposed as model `echo` by default and can be renamed with `ECHO_MODEL_ID`.
+Stateful assistant orchestration is exposed as model `assistant` by default and can be renamed with `ASSISTANT_MODEL_ID`.
 Settings are loaded once when the service starts.
 Token counting uses local `tiktoken` data from `.tiktoken-cache/o200k_base.tiktoken`.
 The repository must contain `.tiktoken-cache/o200k_base.tiktoken`; startup copies it to the cache key path expected by `tiktoken`.
 Default Replicate models in the config are `gpt-5.4` and `gpt-5-nano`.
 Image tools default to `google/nano-banana-2` and `qwen/qwen-image-edit-plus`.
+Assistant state is persisted in local SQLite at `ASSISTANT_SQLITE_PATH`.
 
 ## Run
 
@@ -50,8 +52,10 @@ Always run these before commit:
 
 - `GET /v1/models` returns the configured public model list
 - `GET /v1/tools` returns the internal tool list and JSON schema for each tool
+- `GET {APP_MEDIA_PATH}/...` serves locally downloaded media files
 - `POST /v1/chat/completions` resolves request `model` through `REPLICATE_MODEL_MAP`
 - `POST /v1/chat/completions` routes the local echo model without calling Replicate
+- `POST /v1/chat/completions` with `model=assistant` runs a LangGraph orchestration flow with persisted state
 - `POST /v1/tools/generate_image` calls `google/nano-banana-2` on Replicate
 - `POST /v1/tools/edit_image_uncensored` calls `qwen/qwen-image-edit-plus` on Replicate
 - `stream=true` returns real `text/event-stream` chunks
@@ -64,6 +68,11 @@ Always run these before commit:
 - Optional server-side fallback envs exist only for `verbosity` and `max_completion_tokens`
 - Chat requests may use either `messages` or Replicate-native `prompt`, `system_prompt`, and `image_input`
 - `messages[].content` may be a plain string or an OpenAI-style content-part array with `text` and `image_url`
+- The assistant model uses `gpt-5-nano` to route requests and may escalate text/image analysis to `gpt-5.4`
+- Assistant state key comes from `metadata.conversation_id`; if absent, the app falls back to `user`
+- For Open WebUI, the service can also derive those fields from forwarded headers like `X-OpenWebUI-Chat-Id` and `X-OpenWebUI-User-Id`
+- For image branches the assistant returns markdown with image embeds and download links pointing to FastAPI-served local media URLs
+- Set `APP_PUBLIC_BASE_URL` to the externally reachable base URL of this FastAPI service if Open WebUI users should be able to open generated media links in the browser
 - The image tool accepts `prompt`, optional `image_input` with up to 14 images, `aspect_ratio`, `resolution`, `google_search`, `image_search`, and `output_format`
 - Image tool inputs may be remote URLs, `data:` URLs, existing Replicate file URLs, or local file paths
 - Local file paths are restricted to `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`; by default only `tests/fixtures` and `artifacts/uploads` are allowed
@@ -73,6 +82,7 @@ Always run these before commit:
 - The Qwen edit tool forces `disable_safety_checker=true` via server config and returns `output_urls` plus local downloaded copies
 - Sync mode uses `Prefer: wait=<seconds>`
 - If Replicate returns an incomplete non-stream prediction, the app polls the `urls.get` URL until completion or timeout
+- Transport-level Replicate failures are retried with `REPLICATE_TRANSPORT_RETRIES` and `REPLICATE_TRANSPORT_RETRY_BACKOFF_SECONDS`
 - Stream errors before the upstream stream starts return normal HTTP `502`
 - Stream errors after the stream has started are emitted inside SSE and then end with `[DONE]`
 
@@ -114,5 +124,16 @@ curl -sS -X POST http://127.0.0.1:8000/v1/tools/edit_image_uncensored \
 
 Notes:
 
+- `assistant` is the orchestration model for normal chat use from Open WebUI or any OpenAI-compatible client.
 - `generate_image` is the general-purpose image tool and should be used for normal image generation/editing tasks.
 - `edit_image_uncensored` is intentionally reserved for the Qwen uncensored editing path.
+
+## Open WebUI Setup
+
+1. Add this FastAPI service as an OpenAI-compatible provider in Open WebUI.
+2. Set the model in Open WebUI to `assistant`.
+3. Configure `APP_PUBLIC_BASE_URL` in this service to the URL that the Open WebUI user's browser can reach.
+4. In Open WebUI, set `ENABLE_FORWARD_USER_INFO_HEADERS=true`.
+5. Restart Open WebUI after changing that setting.
+
+With `ENABLE_FORWARD_USER_INFO_HEADERS=true`, Open WebUI sends headers like `X-OpenWebUI-Chat-Id` and `X-OpenWebUI-User-Id`, and this FastAPI service uses them to persist assistant state without any custom filter function.
