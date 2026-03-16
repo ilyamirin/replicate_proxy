@@ -33,6 +33,7 @@
 - `app/run.py`: entrypoint that starts uvicorn using env-based host/port
 - `tests/test_api.py`: API and config tests
 - `AGENTS/ASSISTANT_TESTS.md`: manual regression scenarios for the virtual assistant model
+- `AGENTS/CLARIFICATION_TESTS.md`: planned unit/manual scenarios for the future clarification and guard layer
 - `.env.example`: local configuration template
 - `requirements.txt`: explicit dependency list that must be kept in sync with installs
 - `pyproject.toml`: dependencies and pytest config
@@ -180,6 +181,7 @@ What they cover:
 - `data/` is gitignored and used for LangGraph SQLite state
 - Streaming preflight failures should return HTTP `502`; mid-stream failures can only surface inside SSE
 - Manual assistant smoke/regression scenarios live in `AGENTS/ASSISTANT_TESTS.md`
+- Clarification/guard rollout scenarios and curl checks live in `AGENTS/CLARIFICATION_TESTS.md`
 - Replicate clients now retry transport-level failures before surfacing a final `502`
 
 ## Good next steps if the project grows
