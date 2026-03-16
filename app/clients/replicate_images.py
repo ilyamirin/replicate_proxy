@@ -8,7 +8,11 @@ from uuid import uuid4
 
 import httpx
 
-from app.clients.errors import ReplicateError
+from app.clients.errors import (
+    ReplicateError,
+    UserFacingExecutionError,
+    classify_replicate_error_message,
+)
 from app.clients.replicate_files import ReplicateFilesClient
 from app.clients.retry import (
     is_transient_prediction_error,
@@ -59,29 +63,40 @@ class ReplicateImageClient:
         *,
         tool_name: str,
     ) -> ImageGenerationResponse:
-        resolved_prediction = await retry_replicate_error(
-            lambda: self._create_and_resolve_prediction(model, payload),
-            retries=self.settings.replicate_transport_retries,
-            backoff_seconds=self.settings.replicate_transport_retry_backoff_seconds,
-            should_retry=is_transient_prediction_error,
-        )
-        output_url = self._output_url(resolved_prediction)
-        local_path = None
-        if self.settings.replicate_image_download_output:
-            local_path = await self._download_output(
-                output_url,
-                resolved_prediction.get("id"),
+        try:
+            resolved_prediction = await retry_replicate_error(
+                lambda: self._create_and_resolve_prediction(model, payload),
+                retries=self.settings.replicate_transport_retries,
+                backoff_seconds=self.settings.replicate_transport_retry_backoff_seconds,
+                should_retry=is_transient_prediction_error,
             )
+            output_url = self._output_url(resolved_prediction)
+            local_path = None
+            if self.settings.replicate_image_download_output:
+                local_path = await self._download_output(
+                    output_url,
+                    resolved_prediction.get("id"),
+                )
 
-        return ImageGenerationResponse(
-            tool_name=tool_name,
-            model=model.public_id,
-            prompt=payload.prompt,
-            output_url=output_url,
-            local_path=local_path,
-            output_format=payload.output_format,
-            prediction_id=resolved_prediction.get("id"),
-        )
+            return ImageGenerationResponse(
+                tool_name=tool_name,
+                model=model.public_id,
+                prompt=payload.prompt,
+                output_url=output_url,
+                local_path=local_path,
+                output_format=payload.output_format,
+                prediction_id=resolved_prediction.get("id"),
+            )
+        except ReplicateError as exc:
+            category, retryable = classify_replicate_error_message(str(exc))
+            raise UserFacingExecutionError(
+                stage="image_generation",
+                category=category,
+                retryable=retryable,
+                provider="replicate",
+                model=model.public_id,
+                technical_message=str(exc),
+            ) from exc
 
     async def _create_and_resolve_prediction(
         self,

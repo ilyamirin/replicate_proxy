@@ -1,8 +1,10 @@
 import asyncio
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 from app.assistant_graph import AssistantGraphService
 from app.clients.errors import InputValidationError
+from app.clients.replicate import ReplicateError
 from app.config import AssistantModel, EchoModel, ReplicateModel, Settings
 from app.schemas import ChatCompletionRequest, ChatMessage
 from app.tool_schemas import ImageGenerationResponse
@@ -397,6 +399,39 @@ def test_assistant_graph_uses_unbounded_planner_and_large_full_model_budget(
         assert replicate_client.payloads[0].max_completion_tokens is None
         assert replicate_client.payloads[1].model == "gpt-5.4"
         assert replicate_client.payloads[1].max_completion_tokens == 65536
+        await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_assistant_graph_returns_friendly_fallback_on_planner_failure(
+    tmp_path: Path,
+) -> None:
+    service = AssistantGraphService(
+        make_settings(tmp_path),
+        replicate_client=FakeReplicateClient([]),
+        replicate_image_client=FakeImageClient(
+            str(tmp_path / "artifacts" / "images" / "out.png")
+        ),
+        replicate_qwen_edit_client=FakeQwenClient(),
+    )
+    service._replicate_client.create_reply = AsyncMock(
+        side_effect=ReplicateError("router failed")
+    )
+
+    async def run() -> None:
+        reply = await service.create_reply(
+            ChatCompletionRequest(
+                model="assistant",
+                metadata={"conversation_id": "planner-failed"},
+                messages=[ChatMessage(role="user", content="Привет")],
+            ),
+            request_base_url="http://service.test/",
+        )
+        assert (
+            reply == "Что-то пошло не так на этапе маршрутизации запроса. "
+            "Попробуй повторить его еще раз."
+        )
         await service.aclose()
 
     asyncio.run(run())

@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
+from app.clients.errors import UserFacingExecutionError
 from app.clients.replicate import ReplicateError
 from app.config import (
     AssistantModel,
@@ -525,7 +526,7 @@ def test_assistant_stream_reads_openwebui_headers() -> None:
     assert called_payload.user == "user-stream-1"
 
 
-def test_assistant_stream_preflight_error_returns_502() -> None:
+def test_assistant_stream_preflight_error_returns_503_error_payload() -> None:
     with make_client() as client:
         client.app.state.services.assistant_graph_service.create_reply = AsyncMock(
             side_effect=ReplicateError("router failed")
@@ -543,8 +544,9 @@ def test_assistant_stream_preflight_error_returns_502() -> None:
             },
         )
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == "router failed"
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "execution_error"
+    assert "Что-то пошло не так" in response.json()["error"]["message"]
 
 
 def test_chat_completions_uses_requested_replicate_model() -> None:
@@ -693,7 +695,7 @@ def test_streaming_echo_returns_sse_and_usage() -> None:
     assert events[4] == "[DONE]"
 
 
-def test_streaming_replicate_preflight_error_returns_502() -> None:
+def test_streaming_replicate_preflight_error_returns_503_error_payload() -> None:
     with make_client() as client:
         client.app.state.services.replicate_client.create_reply_stream = AsyncMock(
             side_effect=ReplicateError("boom")
@@ -708,7 +710,70 @@ def test_streaming_replicate_preflight_error_returns_502() -> None:
             },
         )
 
-    assert response.status_code == 502
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "execution_error"
+    assert "Что-то пошло не так" in response.json()["error"]["message"]
+
+
+def test_generate_image_tool_returns_failed_payload_on_execution_error() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_image_client.generate_image = AsyncMock(
+            side_effect=UserFacingExecutionError(
+                stage="image_generation",
+                category="provider_overloaded",
+                provider="replicate",
+                model="nano-banana-2",
+                technical_message="provider failed",
+            )
+        )
+        response = client.post(
+            "/v1/tools/generate_image",
+            json={"prompt": "draw a fox"},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tool_name": "generate_image",
+        "status": "failed",
+        "error_type": "execution_error",
+        "category": "provider_overloaded",
+        "message": (
+            "Что-то пошло не так на этапе генерации изображения. "
+            "Попробуй повторить запрос."
+        ),
+        "retryable": True,
+        "provider": "replicate",
+        "model": "nano-banana-2",
+        "stage": "image_generation",
+    }
+
+
+def test_direct_model_returns_structured_error_payload_on_runtime_failure() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_client.create_reply = AsyncMock(
+            side_effect=RuntimeError("unexpected failure")
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.4",
+                "reasoning_effort": "medium",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "type": "execution_error",
+            "category": "internal_failure",
+            "message": "Что-то пошло не так. Попробуй повторить запрос.",
+            "retryable": False,
+            "provider": None,
+            "model": None,
+            "stage": None,
+        }
+    }
 
 
 def test_streaming_chat_completions_passes_request_model_options() -> None:

@@ -15,7 +15,12 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from app.clients.errors import InputValidationError
+from app.clients.errors import (
+    InputValidationError,
+    ReplicateError,
+    UserFacingExecutionError,
+    classify_replicate_error_message,
+)
 from app.clients.replicate import ReplicateClient
 from app.clients.replicate_images import ReplicateImageClient
 from app.clients.replicate_qwen_edit import ReplicateQwenEditClient
@@ -37,6 +42,7 @@ from app.tool_schemas import (
     QwenImageEditRequest,
     QwenImageEditResponse,
 )
+from app.user_facing_errors import assistant_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +197,31 @@ class AssistantGraphService:
                 graph_input,
                 config={"configurable": {"thread_id": conversation_id}},
             )
+        except UserFacingExecutionError as exc:
+            logger.exception(
+                "assistant request failed conversation_id=%s user=%s prompt=%r",
+                conversation_id,
+                payload.user,
+                prompt_preview,
+            )
+            return assistant_error_message(exc)
+        except ReplicateError as exc:
+            category, retryable = classify_replicate_error_message(str(exc))
+            logger.exception(
+                "assistant request failed conversation_id=%s user=%s prompt=%r",
+                conversation_id,
+                payload.user,
+                prompt_preview,
+            )
+            return assistant_error_message(
+                UserFacingExecutionError(
+                    stage="text_generation",
+                    category=category,
+                    retryable=retryable,
+                    provider="replicate",
+                    technical_message=str(exc),
+                )
+            )
         except Exception:
             logger.exception(
                 "assistant request failed conversation_id=%s user=%s prompt=%r",
@@ -198,7 +229,7 @@ class AssistantGraphService:
                 payload.user,
                 prompt_preview,
             )
-            raise
+            return assistant_error_message(RuntimeError("assistant execution failed"))
 
         logger.info(
             "assistant request complete conversation_id=%s response_chars=%s",
@@ -382,10 +413,21 @@ class AssistantGraphService:
                 ),
             ],
         )
-        decision_text = await self._replicate_client.create_reply(
-            self._require_model(self.settings.assistant_router_model_id),
-            router_request,
-        )
+        try:
+            decision_text = await self._replicate_client.create_reply(
+                self._require_model(self.settings.assistant_router_model_id),
+                router_request,
+            )
+        except ReplicateError as exc:
+            category, retryable = classify_replicate_error_message(str(exc))
+            raise UserFacingExecutionError(
+                stage="planner",
+                category=category,
+                retryable=retryable,
+                provider="replicate",
+                model=self.settings.assistant_router_model_id,
+                technical_message=str(exc),
+            ) from exc
         decision = self._parse_decision(decision_text, payload, resources)
         guard_result = self._guard_decision(decision, payload, resources)
         if guard_result.decision == "clarify":
@@ -451,10 +493,21 @@ class AssistantGraphService:
                 ),
             }
         )
-        reply = await self._replicate_client.create_reply(
-            self._require_model(model_id),
-            text_payload,
-        )
+        try:
+            reply = await self._replicate_client.create_reply(
+                self._require_model(model_id),
+                text_payload,
+            )
+        except ReplicateError as exc:
+            category, retryable = classify_replicate_error_message(str(exc))
+            raise UserFacingExecutionError(
+                stage="text_generation",
+                category=category,
+                retryable=retryable,
+                provider="replicate",
+                model=model_id,
+                technical_message=str(exc),
+            ) from exc
         return {
             "history": [
                 self._message_dump(ChatMessage(role="assistant", content=reply))

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from time import time
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.backends import AppServices, build_services
 from app.clients.errors import InputValidationError
-from app.clients.replicate import ReplicateError
 from app.config import (
     AssistantModel,
     EchoModel,
@@ -38,6 +38,13 @@ from app.tool_schemas import (
     ToolCard,
     ToolListResponse,
 )
+from app.user_facing_errors import (
+    api_error_payload,
+    tool_error_payload,
+    user_facing_message,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -111,8 +118,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except InputValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except ReplicateError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("generate_image tool failed")
+            return tool_error_payload(
+                services.settings.replicate_image_tool_id,
+                exc,
+            )
         return result.model_dump()
 
     @app.post(f"{settings.api_prefix}/tools/{settings.replicate_qwen_edit_tool_id}")
@@ -129,8 +140,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except InputValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except ReplicateError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("edit_image_uncensored tool failed")
+            return tool_error_payload(
+                services.settings.replicate_qwen_edit_tool_id, exc
+            )
         return result.model_dump()
 
     @app.post(f"{settings.api_prefix}/chat/completions")
@@ -164,8 +178,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             except InputValidationError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
-            except ReplicateError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
+            except Exception as exc:
+                logger.exception("stream preflight failed model=%s", payload.model)
+                return JSONResponse(status_code=503, content=api_error_payload(exc))
             return StreamingResponse(
                 stream_chat_completion(
                     services,
@@ -187,8 +202,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except InputValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except ReplicateError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("chat completion failed model=%s", payload.model)
+            return JSONResponse(status_code=503, content=api_error_payload(exc))
 
         usage = services.token_counter.build_usage(
             build_messages_from_request(payload),
@@ -326,13 +342,27 @@ async def stream_chat_completion(
                         ],
                     }
                 )
-    except (InputValidationError, ReplicateError) as exc:
-        error_type = (
-            "input_validation_error"
-            if isinstance(exc, InputValidationError)
-            else "replicate_error"
+    except InputValidationError as exc:
+        yield sse_chunk(
+            {
+                "error": {
+                    "message": str(exc),
+                    "type": "input_validation_error",
+                }
+            }
         )
-        yield sse_chunk({"error": {"message": str(exc), "type": error_type}})
+        yield b"data: [DONE]\n\n"
+        return
+    except Exception as exc:
+        logger.exception("streaming chat completion failed model=%s", payload.model)
+        yield sse_chunk(
+            {
+                "error": {
+                    "message": user_facing_message(exc),
+                    "type": "execution_error",
+                }
+            }
+        )
         yield b"data: [DONE]\n\n"
         return
 
