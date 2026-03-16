@@ -10,7 +10,11 @@ import httpx
 
 from app.clients.errors import ReplicateError
 from app.clients.replicate_files import ReplicateFilesClient
-from app.clients.retry import retry_transport
+from app.clients.retry import (
+    is_transient_prediction_error,
+    retry_replicate_error,
+    retry_transport,
+)
 from app.config import ReplicateModel, Settings
 from app.tool_schemas import ImageGenerationRequest, ImageGenerationResponse
 
@@ -55,8 +59,12 @@ class ReplicateImageClient:
         *,
         tool_name: str,
     ) -> ImageGenerationResponse:
-        prediction = await self._create_prediction(model, payload)
-        resolved_prediction = await self._resolve_prediction(prediction)
+        resolved_prediction = await retry_replicate_error(
+            lambda: self._create_and_resolve_prediction(model, payload),
+            retries=self.settings.replicate_transport_retries,
+            backoff_seconds=self.settings.replicate_transport_retry_backoff_seconds,
+            should_retry=is_transient_prediction_error,
+        )
         output_url = self._output_url(resolved_prediction)
         local_path = None
         if self.settings.replicate_image_download_output:
@@ -74,6 +82,14 @@ class ReplicateImageClient:
             output_format=payload.output_format,
             prediction_id=resolved_prediction.get("id"),
         )
+
+    async def _create_and_resolve_prediction(
+        self,
+        model: ReplicateModel,
+        payload: ImageGenerationRequest,
+    ) -> dict:
+        prediction = await self._create_prediction(model, payload)
+        return await self._resolve_prediction(prediction)
 
     async def _create_prediction(
         self,

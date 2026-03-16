@@ -195,6 +195,68 @@ def test_replicate_image_client_polls_until_output_ready(tmp_path: Path) -> None
     asyncio.run(run())
 
 
+def test_replicate_image_client_retries_transient_prediction_failure(
+    tmp_path: Path,
+) -> None:
+    responses = iter(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "id": "pred-1",
+                    "status": "failed",
+                    "error": (
+                        "Service is currently unavailable due to high demand. "
+                        "Please try again later. (E003)"
+                    ),
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "pred-2",
+                    "status": "succeeded",
+                    "output": ["https://delivery.replicate.com/image.png"],
+                },
+            ),
+            httpx.Response(
+                200,
+                content=b"png-bytes",
+                headers={"Content-Type": "image/png"},
+            ),
+        ]
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return next(responses)
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with (
+            httpx.AsyncClient(
+                base_url=make_settings(tmp_path).replicate_base_url,
+                transport=transport,
+            ) as http_client,
+            httpx.AsyncClient(transport=transport) as download_client,
+        ):
+            client = ReplicateImageClient(
+                make_settings(tmp_path),
+                http_client=http_client,
+                files_client=FakeFilesClient(),
+                download_client=download_client,
+            )
+            result = await client.generate_image(
+                make_settings(tmp_path).replicate_image_model,
+                ImageGenerationRequest(prompt="draw a fox"),
+                tool_name="generate_image",
+            )
+
+        assert result.output_url.endswith(".png")
+        assert result.local_path is not None
+
+    asyncio.run(run())
+
+
 def test_replicate_files_client_uploads_local_paths(tmp_path: Path) -> None:
     source = tmp_path / "cat.png"
     source.write_bytes(b"png-bytes")

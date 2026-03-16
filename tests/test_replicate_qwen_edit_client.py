@@ -208,3 +208,68 @@ def test_qwen_edit_client_polls_until_output_ready(tmp_path: Path) -> None:
         assert len(result.local_paths) == 2
 
     asyncio.run(run())
+
+
+def test_qwen_edit_client_retries_transient_prediction_failure(
+    tmp_path: Path,
+) -> None:
+    responses = iter(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "id": "pred-1",
+                    "status": "failed",
+                    "error": (
+                        "Service is currently unavailable due to high demand. "
+                        "Please try again later. (E003)"
+                    ),
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "id": "pred-2",
+                    "status": "succeeded",
+                    "output": ["https://delivery.replicate.com/image.png"],
+                },
+            ),
+            httpx.Response(
+                200,
+                content=b"png-bytes",
+                headers={"Content-Type": "image/png"},
+            ),
+        ]
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return next(responses)
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with (
+            httpx.AsyncClient(
+                base_url=make_settings(tmp_path).replicate_base_url,
+                transport=transport,
+            ) as http_client,
+            httpx.AsyncClient(transport=transport) as download_client,
+        ):
+            client = ReplicateQwenEditClient(
+                make_settings(tmp_path),
+                http_client=http_client,
+                files_client=FakeFilesClient(),
+                download_client=download_client,
+            )
+            result = await client.edit_image(
+                make_settings(tmp_path).replicate_qwen_edit_model,
+                QwenImageEditRequest(
+                    prompt="turn this into a watercolor cover",
+                    image_input=["tests/fixtures/vision-comic.jpeg"],
+                ),
+                tool_name="edit_image_uncensored",
+            )
+
+        assert result.output_urls == ["https://delivery.replicate.com/image.png"]
+        assert len(result.local_paths) == 1
+
+    asyncio.run(run())
