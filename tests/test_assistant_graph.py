@@ -33,9 +33,9 @@ class MemoryAwareFakeReplicateClient:
             and "routing agent" in first_message.content
         ):
             return (
-                '{"action":"text","text_model":"gpt-5-nano",'
-                '"reasoning_effort":"low","verbosity":"medium",'
-                '"max_completion_tokens":100}'
+                '{"intent":"text","confidence":0.8,"target_resource_ids":[],'
+                '"params":{"reasoning_effort":"low","verbosity":"medium",'
+                '"max_completion_tokens":100},"ambiguities":[],"missing_params":[]}'
             )
 
         history = "\n".join(
@@ -66,9 +66,9 @@ class MetaAwareFakeReplicateClient:
             and "routing agent" in first_message.content
         ):
             return (
-                '{"action":"text","text_model":"gpt-5-nano",'
-                '"reasoning_effort":"medium","verbosity":"medium",'
-                '"max_completion_tokens":400}'
+                '{"intent":"text","confidence":0.8,"target_resource_ids":[],'
+                '"params":{"reasoning_effort":"medium","verbosity":"medium",'
+                '"max_completion_tokens":400},"ambiguities":[],"missing_params":[]}'
             )
 
         last_text = payload.messages[-1].content
@@ -205,8 +205,10 @@ def test_assistant_graph_returns_markdown_with_local_media_url(tmp_path: Path) -
         replicate_client=FakeReplicateClient(
             [
                 (
-                    '{"action":"image","tool_prompt":"draw a fox",'
-                    '"aspect_ratio":"3:4","resolution":"1K","output_format":"png"}'
+                    '{"intent":"image","confidence":0.95,"target_resource_ids":[],'
+                    '"params":{"tool_prompt":"draw a fox","aspect_ratio":"3:4",'
+                    '"resolution":"1K","output_format":"png"},'
+                    '"ambiguities":[],"missing_params":[]}'
                 )
             ]
         ),
@@ -231,11 +233,20 @@ def test_assistant_graph_returns_markdown_with_local_media_url(tmp_path: Path) -
     asyncio.run(run())
 
 
-def test_assistant_graph_forces_image_route_for_draw_requests(tmp_path: Path) -> None:
-    image_path = tmp_path / "artifacts" / "images" / "forced.png"
+def test_assistant_graph_uses_planner_for_draw_requests(tmp_path: Path) -> None:
+    image_path = tmp_path / "artifacts" / "images" / "planned.png"
     image_path.parent.mkdir(parents=True, exist_ok=True)
     image_path.write_bytes(b"png")
-    replicate_client = FakeReplicateClient([])
+    replicate_client = FakeReplicateClient(
+        [
+            (
+                '{"intent":"image","confidence":0.95,"target_resource_ids":[],'
+                '"params":{"tool_prompt":"Draw a donkey in a meadow",'
+                '"aspect_ratio":"3:4","resolution":"1K","output_format":"png"},'
+                '"ambiguities":[],"missing_params":[]}'
+            )
+        ]
+    )
     service = AssistantGraphService(
         make_settings(tmp_path),
         replicate_client=replicate_client,
@@ -255,7 +266,7 @@ def test_assistant_graph_forces_image_route_for_draw_requests(tmp_path: Path) ->
             request_base_url="http://service.test/",
         )
         assert "generated image" in reply
-        assert replicate_client.calls == 0
+        assert replicate_client.calls == 1
         await service.aclose()
 
     asyncio.run(run())
@@ -309,15 +320,52 @@ def test_assistant_graph_uses_persisted_history_for_text_replies(
     asyncio.run(run())
 
 
+def test_assistant_graph_persists_plain_dict_history(tmp_path: Path) -> None:
+    service = AssistantGraphService(
+        make_settings(tmp_path),
+        replicate_client=FakeReplicateClient(
+            [
+                (
+                    '{"intent":"text","confidence":0.8,"target_resource_ids":[],'
+                    '"params":{"reasoning_effort":"medium","verbosity":"medium",'
+                    '"max_completion_tokens":64},"ambiguities":[],"missing_params":[]}'
+                ),
+                "Ответ.",
+            ]
+        ),
+        replicate_image_client=FakeImageClient(
+            str(tmp_path / "artifacts" / "images" / "out.png")
+        ),
+        replicate_qwen_edit_client=FakeQwenClient(),
+    )
+
+    async def run() -> None:
+        await service.create_reply(
+            ChatCompletionRequest(
+                model="assistant",
+                metadata={"conversation_id": "dict-history-test"},
+                messages=[ChatMessage(role="user", content="Привет")],
+            ),
+            request_base_url="http://service.test/",
+        )
+        state = await service._load_state_values("dict-history-test")
+        assert state["history"]
+        assert isinstance(state["history"][0], dict)
+        assert state["history"][0]["role"] == "user"
+        await service.aclose()
+
+    asyncio.run(run())
+
+
 def test_assistant_graph_uses_unbounded_planner_and_large_full_model_budget(
     tmp_path: Path,
 ) -> None:
     replicate_client = FakeReplicateClient(
         [
             (
-                '{"action":"text","text_model":"gpt-5-nano",'
-                '"reasoning_effort":"medium","verbosity":"medium",'
-                '"max_completion_tokens":null}'
+                '{"intent":"text","confidence":0.8,"target_resource_ids":[],'
+                '"params":{"reasoning_effort":"medium","verbosity":"medium",'
+                '"max_completion_tokens":null},"ambiguities":[],"missing_params":[]}'
             ),
             "Полный ответ.",
         ]
@@ -349,6 +397,42 @@ def test_assistant_graph_uses_unbounded_planner_and_large_full_model_budget(
         assert replicate_client.payloads[0].max_completion_tokens is None
         assert replicate_client.payloads[1].model == "gpt-5.4"
         assert replicate_client.payloads[1].max_completion_tokens == 65536
+        await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_assistant_graph_clamps_text_budget_to_provider_minimum(tmp_path: Path) -> None:
+    replicate_client = FakeReplicateClient(
+        [
+            (
+                '{"intent":"text","confidence":0.95,"target_resource_ids":[],'
+                '"params":{"reasoning_effort":"medium","verbosity":"low",'
+                '"max_completion_tokens":8},"ambiguities":[],"missing_params":[]}'
+            ),
+            "Короткий ответ.",
+        ]
+    )
+    service = AssistantGraphService(
+        make_settings(tmp_path),
+        replicate_client=replicate_client,
+        replicate_image_client=FakeImageClient(
+            str(tmp_path / "artifacts" / "images" / "out.png")
+        ),
+        replicate_qwen_edit_client=FakeQwenClient(),
+    )
+
+    async def run() -> None:
+        reply = await service.create_reply(
+            ChatCompletionRequest(
+                model="assistant",
+                metadata={"conversation_id": "planner-min-budget-test"},
+                messages=[ChatMessage(role="user", content="What is 2 + 2?")],
+            ),
+            request_base_url="http://service.test/",
+        )
+        assert reply == "Короткий ответ."
+        assert replicate_client.payloads[1].max_completion_tokens == 16
         await service.aclose()
 
     asyncio.run(run())
