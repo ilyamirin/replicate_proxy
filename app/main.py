@@ -21,7 +21,7 @@ from app.config import (
     load_settings,
     snapshot_settings,
 )
-from app.model_options import allowed_reasoning_efforts
+from app.model_options import allowed_reasoning_efforts, completion_token_bounds
 from app.openwebui_meta import mark_openwebui_meta_request
 from app.schemas import (
     ChatCompletionRequest,
@@ -418,12 +418,36 @@ async def prepare_model_stream(
 
 
 def validate_model_payload(
-    _: Settings,
+    settings: Settings,
     model: AssistantModel | EchoModel | ReplicateModel,
     payload: ChatCompletionRequest,
 ) -> None:
     if isinstance(model, (EchoModel, AssistantModel)):
         return
+
+    image_count = count_request_images(payload)
+    if model.name == "claude-4.5-sonnet" and image_count > 1:
+        raise HTTPException(
+            status_code=422,
+            detail=f"model {model.public_id} accepts at most one image input",
+        )
+
+    bounds = completion_token_bounds(model)
+    effective_max_completion_tokens = (
+        payload.max_completion_tokens
+        if payload.max_completion_tokens is not None
+        else settings.replicate_default_max_completion_tokens
+    )
+    if bounds is not None and effective_max_completion_tokens is not None:
+        min_tokens, max_tokens = bounds
+        if not min_tokens <= effective_max_completion_tokens <= max_tokens:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"max_completion_tokens for model {model.public_id} must be "
+                    f"between {min_tokens} and {max_tokens}"
+                ),
+            )
 
     allowed = allowed_reasoning_efforts(model)
     if allowed is None:
@@ -444,6 +468,19 @@ def validate_model_payload(
                 f"for model {model.public_id}; allowed: {allowed_text}"
             ),
         )
+
+
+def count_request_images(payload: ChatCompletionRequest) -> int:
+    if payload.image_input:
+        return len(payload.image_input)
+
+    count = 0
+    for message in payload.messages:
+        content = message.content
+        if isinstance(content, str):
+            continue
+        count += sum(1 for part in content if part.type == "image_url")
+    return count
 
 
 def enrich_assistant_payload_from_headers(

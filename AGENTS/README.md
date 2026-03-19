@@ -70,6 +70,7 @@
 - `REPLICATE_LOCAL_IMAGE_INPUT_ROOTS`: comma-separated allowlist for local `image_input` paths, default `tests/fixtures,artifacts/uploads`
 - `REPLICATE_DEFAULT_VERBOSITY`: optional fallback for requests that omit `verbosity`
 - `REPLICATE_DEFAULT_MAX_COMPLETION_TOKENS`: optional fallback for requests that omit `max_completion_tokens`
+  For `claude-4.5-sonnet`, this fallback must stay within `1024..64000`.
 - `REPLICATE_SYNC_WAIT_SECONDS`: sync wait header for Replicate
 - `REPLICATE_POLL_INTERVAL_SECONDS`: poll interval after incomplete sync response
 - `REPLICATE_POLL_TIMEOUT_SECONDS`: max poll duration
@@ -89,7 +90,8 @@
 - If the request `model` equals `ECHO_MODEL_ID`, reply content is the last `user` message from the request
 - All other known models are resolved via `REPLICATE_MODEL_MAP` and sent to Replicate
 - `stream=true` returns OpenAI-style SSE chunks
-- Replicate models require request-level `reasoning_effort`
+- OpenAI GPT models require request-level `reasoning_effort`
+- `claude-4.5-sonnet` does not use `reasoning_effort` or `verbosity`; it accepts only Claude-compatible fields and at most one image
 - Request schema also accepts `verbosity` and `max_completion_tokens`
 - If those request fields are absent, the app uses `REPLICATE_DEFAULT_*` env fallbacks only for `verbosity` and `max_completion_tokens`
 - Chat request schema also accepts Replicate-native `prompt`, `system_prompt`, and `image_input`

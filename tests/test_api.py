@@ -47,6 +47,11 @@ def make_settings() -> Settings:
                 owner="openai",
                 name="gpt-5-nano",
             ),
+            "claude-4.5-sonnet": ReplicateModel(
+                public_id="claude-4.5-sonnet",
+                owner="anthropic",
+                name="claude-4.5-sonnet",
+            ),
         },
         replicate_image_tool_id="generate_image",
         replicate_image_model=ReplicateModel(
@@ -210,6 +215,12 @@ def test_models_lists_available_models() -> None:
                 "object": "model",
                 "created": 0,
                 "owned_by": "openai",
+            },
+            {
+                "id": "claude-4.5-sonnet",
+                "object": "model",
+                "created": 0,
+                "owned_by": "anthropic",
             },
         ],
     }
@@ -631,6 +642,91 @@ def test_replicate_models_require_reasoning_effort() -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == "reasoning_effort is required for model gpt-5.4"
+
+
+def test_claude_does_not_require_reasoning_effort() -> None:
+    with make_client() as client:
+        client.app.state.services.replicate_client.create_reply = AsyncMock(
+            return_value="claude reply"
+        )
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-4.5-sonnet",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 200
+    called_model = (
+        client.app.state.services.replicate_client.create_reply.await_args.args[0]
+    )
+    assert called_model.public_id == "claude-4.5-sonnet"
+
+
+def test_claude_rejects_too_small_max_completion_tokens() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-4.5-sonnet",
+                "max_completion_tokens": 512,
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "max_completion_tokens for model claude-4.5-sonnet must be "
+        "between 1024 and 64000"
+    )
+
+
+def test_claude_rejects_multiple_images() -> None:
+    with make_client() as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-4.5-sonnet",
+                "prompt": "Describe these",
+                "image_input": [
+                    "https://example.com/1.png",
+                    "https://example.com/2.png",
+                ],
+            },
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "model claude-4.5-sonnet accepts at most one image input"
+    )
+
+
+def test_claude_rejects_invalid_default_max_completion_tokens() -> None:
+    settings = make_settings()
+    settings = Settings(
+        **{
+            **settings.__dict__,
+            "replicate_default_max_completion_tokens": 512,
+        }
+    )
+    with make_client(settings) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "claude-4.5-sonnet",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 422
+    assert (
+        response.json()["detail"]
+        == "max_completion_tokens for model claude-4.5-sonnet must be "
+        "between 1024 and 64000"
+    )
 
 
 def test_chat_completions_accepts_prompt_system_prompt_and_image_input() -> None:

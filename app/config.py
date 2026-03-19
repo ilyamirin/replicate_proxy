@@ -4,7 +4,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_REPLICATE_MODEL_MAP = "gpt-5.4=openai/gpt-5.4"
+DEFAULT_REPLICATE_MODEL_MAP = (
+    "gpt-5.4=openai/gpt-5.4,"
+    "gpt-5-nano=openai/gpt-5-nano,"
+    "claude-4.5-sonnet=anthropic/claude-4.5-sonnet"
+)
 DEFAULT_REPLICATE_IMAGE_TOOL_MODEL = "google/nano-banana-2"
 DEFAULT_REPLICATE_QWEN_EDIT_TOOL_MODEL = "qwen/qwen-image-edit-plus"
 DEFAULT_LOCAL_IMAGE_INPUT_ROOTS = "tests/fixtures,artifacts/uploads"

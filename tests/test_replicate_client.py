@@ -46,7 +46,12 @@ def make_settings() -> Settings:
                 public_id="gpt-5.4",
                 owner="openai",
                 name="gpt-5.4",
-            )
+            ),
+            "claude-4.5-sonnet": ReplicateModel(
+                public_id="claude-4.5-sonnet",
+                owner="anthropic",
+                name="claude-4.5-sonnet",
+            ),
         },
         replicate_image_tool_id="generate_image",
         replicate_image_model=ReplicateModel(
@@ -518,5 +523,112 @@ def test_replicate_client_converts_message_images_to_native_input() -> None:
         assert "messages" not in body["input"]
         assert body["input"]["prompt"] == "What animal is shown?"
         assert body["input"]["image_input"] == ["https://api.replicate.com/v1/files/1"]
+
+    asyncio.run(run())
+
+
+def test_replicate_client_maps_claude_messages_to_prompt_contract() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
+
+    async def run() -> None:
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=make_settings().replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(make_settings(), http_client=http_client)
+            await client.create_reply(
+                make_settings().replicate_model_map["claude-4.5-sonnet"],
+                ChatCompletionRequest(
+                    model="claude-4.5-sonnet",
+                    max_completion_tokens=2048,
+                    messages=[
+                        ChatMessage(role="system", content="You are concise."),
+                        ChatMessage(role="user", content="Write a haiku."),
+                        ChatMessage(role="assistant", content="Earlier answer."),
+                        ChatMessage(role="user", content="Try again."),
+                    ],
+                ),
+            )
+
+        body = json.loads(calls[0].content)
+        assert calls[0].url.path == (
+            "/v1/models/anthropic/claude-4.5-sonnet/predictions"
+        )
+        assert body["input"] == {
+            "system_prompt": "You are concise.",
+            "prompt": "Write a haiku.\n\nassistant: Earlier answer.\n\nTry again.",
+            "max_tokens": 2048,
+        }
+
+    asyncio.run(run())
+
+
+def test_replicate_client_maps_claude_native_image_to_single_image_field() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"status": "succeeded", "output": ["ok"]})
+
+    async def run() -> None:
+        files_client = FakeFilesClient()
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(
+            base_url=make_settings().replicate_base_url,
+            transport=transport,
+        ) as http_client:
+            client = ReplicateClient(
+                make_settings(),
+                http_client=http_client,
+                files_client=files_client,
+            )
+            await client.create_reply(
+                make_settings().replicate_model_map["claude-4.5-sonnet"],
+                ChatCompletionRequest(
+                    model="claude-4.5-sonnet",
+                    prompt="Describe this image",
+                    image_input=["https://example.com/cat.png"],
+                    max_completion_tokens=1024,
+                ),
+            )
+
+        body = json.loads(calls[0].content)
+        assert files_client.calls == ["https://example.com/cat.png"]
+        assert body["input"] == {
+            "prompt": "Describe this image",
+            "image": "https://api.replicate.com/v1/files/1",
+            "max_tokens": 1024,
+        }
+
+    asyncio.run(run())
+
+
+def test_replicate_client_rejects_multiple_claude_images() -> None:
+    async def run() -> None:
+        files_client = FakeFilesClient()
+        client = ReplicateClient(make_settings(), files_client=files_client)
+        try:
+            await client.create_reply(
+                make_settings().replicate_model_map["claude-4.5-sonnet"],
+                ChatCompletionRequest(
+                    model="claude-4.5-sonnet",
+                    prompt="Describe these images",
+                    image_input=[
+                        "https://example.com/1.png",
+                        "https://example.com/2.png",
+                    ],
+                ),
+            )
+        except InputValidationError as exc:
+            assert "at most one image input" in str(exc)
+        else:
+            raise AssertionError("InputValidationError was not raised")
+        finally:
+            await client.aclose()
 
     asyncio.run(run())

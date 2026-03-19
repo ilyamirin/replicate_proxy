@@ -17,7 +17,7 @@ Stateful assistant orchestration is exposed as model `assistant` by default and 
 Settings are loaded once when the service starts.
 Token counting uses local `tiktoken` data from `.tiktoken-cache/o200k_base.tiktoken`.
 The repository must contain `.tiktoken-cache/o200k_base.tiktoken`; startup copies it to the cache key path expected by `tiktoken`.
-Default Replicate models in the config are `gpt-5.4` and `gpt-5-nano`.
+Default Replicate models in the config are `gpt-5.4`, `gpt-5-nano`, and `claude-4.5-sonnet`.
 Image tools default to `google/nano-banana-2` and `qwen/qwen-image-edit-plus`.
 Assistant state is persisted in local SQLite at `ASSISTANT_SQLITE_PATH`.
 
@@ -61,10 +61,12 @@ Always run these before commit:
 - `stream=true` returns real `text/event-stream` chunks
 - Token usage is calculated with local `tiktoken` using `o200k_base`
 - `REPLICATE_MODEL_MAP` format: `public-id=owner/model-name`
-- Current defaults: `gpt-5.4=openai/gpt-5.4`, `gpt-5-nano=openai/gpt-5-nano`
+- Current defaults: `gpt-5.4=openai/gpt-5.4`, `gpt-5-nano=openai/gpt-5-nano`, `claude-4.5-sonnet=anthropic/claude-4.5-sonnet`
 - Official prediction endpoint pattern: `POST /v1/models/{owner}/{name}/predictions`
-- Replicate models require the client to send `reasoning_effort`
-- The app also forwards OpenAI-style request fields `verbosity` and `max_completion_tokens` when the client provides them
+- OpenAI GPT models in this service require `reasoning_effort`
+- The app forwards model-specific generation fields when supported: OpenAI GPT models accept `reasoning_effort`, `verbosity`, and `max_completion_tokens`; `anthropic/claude-4.5-sonnet` maps requests to Replicate `prompt`, `system_prompt`, optional single `image`, and `max_tokens`
+- `anthropic/claude-4.5-sonnet` ignores OpenAI-specific `reasoning_effort` and `verbosity`; clients should not rely on those fields for Claude requests
+- `anthropic/claude-4.5-sonnet` accepts at most one image and requires `max_completion_tokens` (or the server fallback) to stay within `1024..64000`
 - Optional server-side fallback envs exist only for `verbosity` and `max_completion_tokens`
 - Chat requests may use either `messages` or Replicate-native `prompt`, `system_prompt`, and `image_input`
 - `messages[].content` may be a plain string or an OpenAI-style content-part array with `text` and `image_url`
